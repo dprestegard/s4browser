@@ -37,7 +37,7 @@ func TestSettingsValidateRejects(t *testing.T) {
 
 func TestMemoryBoundAtDefaults(t *testing.T) {
 	got := MemoryBound(DefaultSettings(), 1000)
-	want := 16*MiB + 36*384*KiB + 32*MiB + 4*10_000*96 + 1000*2*KiB
+	want := 8*MiB + 36*256*KiB + 32*MiB + 4*10_000*96 + 1000*2*KiB
 	if got != want {
 		t.Fatalf("got %d, want %d", got, want)
 	}

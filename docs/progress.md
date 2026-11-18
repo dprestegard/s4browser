@@ -169,3 +169,68 @@ s.VerifyObject(bucket, key, seed, 64)               // uploaded parts match Patt
 ### Next
 
 Stage 0.4 starts from this commit. It is not started here.
+
+## Stage 0.4: scheduler, limiter and upload path
+
+**Status:** done. `go build ./...`, `go test -count=1 ./...`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` pass. `GOOS=darwin go vet` passes for engine, journal, fsx, s3x and fakes3. No AWS calls were made and `~/.aws` was not read.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Scheduler, commands, shutdown | `internal/engine/scheduler.go`, `job.go` |
+| Upload path, retries, cleanup | `internal/engine/upload.go` |
+| Credential wait and probes | `internal/engine/credentials.go` |
+| Metered body, watchdog, limiter, progress | `internal/engine/body.go`, `watchdog.go`, `limiter.go`, `progress.go` |
+| Production clock and file source | `internal/engine/clock.go`, `filesource.go` |
+| `engine.ObjectStore` adapter and tuned transport | `internal/s3x/store.go`, `transport.go` |
+| File journal and process lock | `internal/journal/filestore.go`, `lock_windows.go`, `lock_unix.go` |
+
+### Measured results
+
+Measured on the 16-core, 32-thread development machine with Go 1.27.4.
+
+| Check | Result |
+|---|---|
+| 2 TiB upload, no race detector | Passed. 9,987 parts of 210 MiB in 30 s, plus 19 s to verify |
+| 2 TiB upload, race detector | **Passed.** Upload 16 min 52 s, verify 11 min 58 s, 1,734 s (28 min 54 s) wall clock |
+| Parts sent on the clean 2 TiB runs | Every part exactly once. The CRC32 of all 9,987 parts was recomputed from the pattern |
+| Peak heap growth during the 2 TiB run | 10.2 MiB, limit 130.3 MiB (2 x `MemoryBound`) |
+| Peak heap, 128 GiB object | 2.9 MiB with 64 MiB parts, 0.3 MiB with 1 GiB parts |
+| Deliberate bugs injected to test the tests | 15 of 15 caught |
+
+The 2 TiB memory figure uses the in-process store, so it has no TLS connections in it. Connection memory was measured separately, as the table in design section 4 shows.
+
+An ordinary `go test -race` uploads 32 GiB in this test. To repeat the full run:
+
+```powershell
+$env:S4_RACE_FULL_2TIB = "1"
+go test -race -count=1 -timeout 0 -v -run '^TestSimulated2TiBUpload$' ./internal/engine
+```
+
+### Contract changes
+
+- **HEAD errors.** A bare HEAD 400, 401 or 403 is now resolved by a one-byte ranged GET, whose error body carries the real code. Expired credentials wait, `AccessDenied` fails the job, and an unresolved case is retryable, so the retry budget ends it. See design section 6. New: `engine.IsCodelessAuthFailure`, `engine.CodeAmbiguousAuth`.
+- **Memory constants.** `MemBase` went from 16 MiB to 8 MiB and `MemPerConnection` from 384 KiB to 256 KiB. The default bound is now about 55 MiB.
+- **Broken responses.** A 2xx status with no error code means the connection failed while the response was read. It is retryable. The HTTPS tests found this bug.
+- **Create runs detached from a user cancel,** so the new upload's ID is known and it can be aborted.
+- **A Create with no response** leaves a separate `creating` journal entry, `<job>-<run>-c<attempt>`, for launch cleanup.
+- **Single PUT verifies the source afterwards.**
+- **New sentinels:** `ErrInvalidConfig`, and `ErrDownloadUnsupported`, which stage 0.5 removes. New constructors: `engine.New`, `engine.NewBandwidthLimiter`, `journal.OpenFile`, `s3x.NewStore`.
+- **Dependencies:** `golang.org/x/time` v0.16.0 and `golang.org/x/sys` are now direct.
+
+### Open risks
+
+- **Real S3 is still unverified until stage 0.7.** That includes the diagnostic GET, the error codes and the composite checksum format.
+- **Orphaned uploads wait for stage 2.1.** A lost Create response leaves an upload on S3 that only `journal.Recoverer` can remove, and that does not exist yet.
+- **Stage 2.1 must guard intent matching.** `MatchesIntent` matches by key and time, so launch cleanup could abort a new job's live upload to the same key within the one-hour window.
+- **No production `CredentialProber` exists yet.** Stage 2.1 owns it. Pause, resume and credential recovery work and are tested here, but kill-and-relaunch is not covered.
+- **Part of `MemBase` is unmeasured.** The idle figure is 0.21 MiB. The rest is headroom for the request built by Complete at 10,000 parts.
+- **`GetRangeRequest` has no size field,** so the adapter cannot compare the `Content-Range` total. Stage 0.5 should add it.
+- **Shutdown tries each abort once.** A failed abort stays in the journal for next launch.
+- **A store that ignores cancellation blocks `Close`.** `Close` then returns the caller's context error and that goroutine stays alive.
+- **`TestLiveBandwidthChange` uses real time.** Its margins are wide, but a heavily loaded machine could still fail it.
+
+### Next
+
+Stage 0.5 (download path and NTFS write strategies) starts from this commit. It is not started here.

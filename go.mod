@@ -8,6 +8,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/wailsapp/wails/v2 v2.17.1
+	golang.org/x/sys v0.48.0
+	golang.org/x/time v0.16.0
 )
 
 require (
@@ -45,7 +47,6 @@ require (
 	github.com/wailsapp/go-webview2 v1.0.22 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
-	golang.org/x/sys v0.48.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 )
 

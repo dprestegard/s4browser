@@ -46,13 +46,16 @@ func (s Settings) Validate() error {
 	return nil
 }
 
-// Memory budget terms, in bytes of live Go heap. Stage 0.4 measures them and
-// must update these constants and docs/engine-design.md if a term is exceeded.
+// Memory budget terms, in bytes of live Go heap. Tests in internal/engine and
+// internal/s3x measure them. Update these constants and docs/engine-design.md
+// together if a term is exceeded.
 const (
-	// MemBase covers the scheduler, watchdog, progress and SDK client state.
-	MemBase = 16 * MiB
+	// MemBase covers the scheduler, watchdog, progress and SDK client state, plus
+	// the short-lived request built by CompleteMultipartUpload. Measured idle: 0.21 MiB.
+	MemBase = 8 * MiB
 	// MemPerConnection covers TLS records, transport buffers and request state.
-	MemPerConnection = 384 * KiB
+	// Measured: 200 to 217 KiB per in-flight upload.
+	MemPerConnection = 256 * KiB
 	// MemPerPartEntry is one entry of an active job's part table.
 	MemPerPartEntry = 96
 	// MemPerJobRecord is one tracked job that has no part table.

@@ -138,14 +138,25 @@ Each test that starts an engine must end by calling `Close` and asserting that t
 `MemoryBound` in `internal/engine/settings.go` is the formula:
 
 ```
-peak live heap <= MemBase (16 MiB)
-                + (MaxActiveParts + MaxActiveFiles) * MemPerConnection (384 KiB)
+peak live heap <= MemBase (8 MiB)
+                + (MaxActiveParts + MaxActiveFiles) * MemPerConnection (256 KiB)
                 + MaxActiveParts * DownloadBufferSize (1 MiB)
                 + MaxActiveFiles * MaxPartCount (10,000) * MemPerPartEntry (96 B)
                 + trackedJobs * MemPerJobRecord (2 KiB)
 ```
 
-At default settings with 1,000 tracked jobs the bound is about 67 MiB. Part size and object size do not appear in it.
+At default settings with 1,000 tracked jobs the bound is about 55 MiB. Part size and object size do not appear in it.
+
+Stage 0.4 measured each term on Windows with Go 1.27.4. The S3 endpoint ran in a child process, so only client memory was counted.
+
+| Term | Measured | Budget | Test |
+|---|---|---|---|
+| `MemBase`, idle engine with a warmed-up SDK client | 0.21 MiB | 8 MiB | `TestMemBaseBudget` |
+| `MemPerConnection`, in-flight TLS upload | 200 KiB at 256 connections, 217 KiB at 32 | 256 KiB | `TestMemPerConnectionBudget` |
+| `MemPerPartEntry` | 89 B | 96 B | `TestPartTableFitsBudget` |
+| `MemPerJobRecord`, queued job | 465 B | 2 KiB | `TestQueuedJobRecordFitsBudget` |
+
+`MemBase` is larger than the idle measurement because it also covers the short-lived request built by `CompleteMultipartUpload` at 10,000 parts. That transient was not measured separately.
 
 To keep it true:
 
@@ -198,6 +209,19 @@ The error code decides first, then the status. `AccessDenied` stays permanent be
 
 **Adapter mapping in `internal/s3x`:** extract the code with `errors.As(err, &smithy.APIError)`, the status with `errors.As(err, &awshttp.ResponseError)` and the request ID from the same error. Return `*engine.OpError`. Map 412 on a GET to `ErrObjectChanged`. Requests that never reach the network because the input is invalid become `ClassPermanent`.
 
+**A success status with no error code** means the connection failed while the response was being read. The adapter reports status 0, so the failure is retryable and its outcome counts as unknown.
+
+**HEAD errors carry no code.** A HEAD response has no body, so the SDK reports only the status text, such as `BadRequest` or `Forbidden`. A bare 400, 401 or 403 can mean expired credentials or a real permission failure. `engine.IsCodelessAuthFailure` identifies this case, and `ClassifyResponse` must not decide it. `s3x.Store.HeadObject` repeats the request as `GetObject` with `Range: bytes=0-0`, which needs the same permission and returns an error body:
+
+| Diagnostic GET result | Class returned | Effect |
+|---|---|---|
+| A real error code | `ClassifyResponse` of that code | `ExpiredToken` waits for credentials. `AccessDenied` fails the job |
+| Success, or 416 on an empty object | `ClassRetryable`, code `AmbiguousHeadAuth` | Access works, so the HEAD is retried |
+| No response, or a response with no code | `ClassRetryable`, code `AmbiguousHeadAuth` | The retry budget ends it, so it cannot retry forever |
+| Cancelled | `ClassCancelled` | Nothing is reported |
+
+Every other `ObjectStore` implementation must also resolve this case before returning.
+
 **Attempts** must call `ClassifyAttempt(ctx, err)`. The context's cause outranks the returned error, because the SDK reports every cancellation generically.
 
 **Local I/O:** the upload body wrapper stores any `ReadAt` error in the attempt before returning it to the SDK. The attempt checks that stored error first and reports `ErrLocalIO`, otherwise a disk failure would look like a network failure.
@@ -242,7 +266,11 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 
 **Lost Complete response:** if a retry of Complete returns `NoSuchUpload`, an earlier attempt may have succeeded. Call `HeadObject`, which the adapter must always send with `ChecksumMode=ENABLED`. If the checksum equals the local composite value, the job succeeded. Otherwise fail.
 
-**Single PUT:** `PutObject` with the same body wrapper and CRC32, with no journal entry.
+**Single PUT:** `PutObject` with the same body wrapper and CRC32, with no journal entry. The source is verified afterwards. If it changed, the job fails and the warning says the object on S3 may not match the local file.
+
+**Create is not interrupted by a user cancel.** It runs detached from the job's context, so cancel waits for the upload ID and can then abort that upload. Engine close does cancel it.
+
+**Lost Create response:** a Create that ends with no response may have made an upload whose ID is unknown. Before retrying, the engine writes a separate `creating` entry with the ID `<job>-<run>-c<attempt>`. The job never deletes that entry, so launch cleanup can find the upload with `MatchesIntent`.
 
 ### Verified SDK behaviour
 
@@ -269,7 +297,7 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 5. **Commit:** `SinkWriter.Commit` syncs, closes and renames without replacing.
 6. **Journal delete:** `Store.Delete`.
 
-**Response checks in the adapter:** status 206, `Content-Range` start and end equal to the request, total equal to the recorded size and ETag equal to the recorded ETag. A total or ETag difference or a 412 returns `ErrObjectChanged`, which is permanent. A short body is `io.ErrUnexpectedEOF`, which is retryable.
+**Response checks in the adapter:** status 206, `Content-Range` start and end equal to the request, and ETag equal to the recorded ETag. `GetRangeRequest` has no size field, so stage 0.4 relies on `If-Match` and the ETag instead of comparing the total. Stage 0.5 should add the field if it wants the total checked. A total or ETag difference or a 412 returns `ErrObjectChanged`, which is permanent. A short body is `io.ErrUnexpectedEOF`, which is retryable.
 
 **Mid-part retry:** the part records bytes written. A retry requests only the remaining range, so finished bytes are not fetched again.
 
@@ -353,7 +381,7 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 
 **No secrets:** `Entry` is an allowlist containing a profile *name*, region, bucket, key, upload ID, temp path and timestamps. A test fails if a field is added, and `Decode` rejects unknown fields.
 
-**Single instance:** `Store` holds `journal.lock` and returns `ErrLocked` if another process has it. Without the lock, a second instance would abort the first instance's live uploads at launch.
+**Single instance:** `journal.OpenFile` holds `journal.lock` and returns `ErrLocked` if another process has it. Without the lock, a second instance would abort the first instance's live uploads at launch. The lock is `LockFileEx` on Windows and `flock` elsewhere, so the operating system releases it when the process dies.
 
 ### Crash windows
 

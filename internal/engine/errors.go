@@ -96,6 +96,10 @@ var (
 	ErrUnknownJob = errors.New("engine: unknown job")
 	// ErrInvalidSettings means Settings.Validate failed.
 	ErrInvalidSettings = errors.New("engine: invalid settings")
+	// ErrInvalidConfig means New was given an unusable Config.
+	ErrInvalidConfig = errors.New("engine: invalid config")
+	// ErrDownloadUnsupported rejects download jobs until stage 0.5 adds that path.
+	ErrDownloadUnsupported = errors.New("engine: downloads are not implemented")
 )
 
 // OpError is the only error type ObjectStore implementations return for a
@@ -179,6 +183,30 @@ func ClassifyResponse(status int, code string) (class Class, throttled bool) {
 		return ClassRetryable, false
 	}
 	return ClassPermanent, false
+}
+
+// CodeAmbiguousAuth marks a HEAD authorization failure whose cause could not be
+// determined. It is retryable, so the retry budget bounds it.
+const CodeAmbiguousAuth = "AmbiguousHeadAuth"
+
+// IsCodelessAuthFailure reports whether a response is a 400, 401 or 403 that
+// names no real S3 error code. HEAD responses have no body, so the SDK can only
+// report the status text. Such a response may mean expired credentials or a real
+// permission failure, and ClassifyResponse must not decide between them.
+//
+// An ObjectStore that sees one must find the real code before it returns, as
+// internal/s3x does with a one-byte ranged GET. See docs/engine-design.md section 6.
+func IsCodelessAuthFailure(status int, code string) bool {
+	switch status {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+	default:
+		return false
+	}
+	switch code {
+	case "", "BadRequest", "Unauthorized", "Forbidden", "UnknownError":
+		return true
+	}
+	return false
 }
 
 // Classify returns the Class of any error seen by the engine. Attempts must use
