@@ -1,0 +1,27 @@
+# Build output
+build/bin/
+
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+
+# Local environment and credentials (never commit)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+*.credentials
+secrets*.json
+.aws/
+
+# Local sample media kept in the repo root (large, not source)
+/*.mkv
+
+# Editor and OS noise
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
