@@ -23,8 +23,12 @@ type scheduler struct {
 	results      chan func()
 	batches      chan chan ProgressBatch
 	closeRequest chan struct{}
-	closeOnce    sync.Once
-	stopped      chan struct{}
+	// poke wakes the loop when a download attempt parks, so that preemption can
+	// be considered. Sends never block.
+	poke      chan struct{}
+	dlStats   downloadStats
+	closeOnce sync.Once
+	stopped   chan struct{}
 
 	watchdogStop chan struct{}
 	progressStop chan struct{}
@@ -89,6 +93,7 @@ func New(cfg Config) (Engine, error) {
 		results:      make(chan func()),
 		batches:      make(chan chan ProgressBatch),
 		closeRequest: make(chan struct{}),
+		poke:         make(chan struct{}, 1),
 		stopped:      make(chan struct{}),
 		watchdogStop: make(chan struct{}),
 		progressStop: make(chan struct{}),
@@ -177,9 +182,6 @@ func (s *scheduler) do(ctx context.Context, fn func() error) error {
 
 // Submit implements Engine.
 func (s *scheduler) Submit(ctx context.Context, spec JobSpec) (JobID, error) {
-	if spec.Direction != Upload {
-		return "", ErrDownloadUnsupported
-	}
 	var raw [8]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", err
@@ -373,6 +375,7 @@ func (s *scheduler) loop() {
 		case <-timerC:
 			s.timerArmed = false
 			s.fireWakes()
+		case <-s.poke:
 		case <-closeRequest:
 			closeRequest = nil
 			s.beginClose()
@@ -400,6 +403,7 @@ func (s *scheduler) pump() {
 		s.queue = nil
 	}
 	s.dispatchParts()
+	s.preemptStarved()
 }
 
 func (s *scheduler) slots() int { return len(s.slotted) }
@@ -430,7 +434,7 @@ func (s *scheduler) dispatchParts() {
 		for i := 0; i < count && s.activeParts < s.settings.MaxActiveParts; i++ {
 			j := s.slotted[(s.roundRobin+i)%count]
 			if j.state == JobRunning && j.step == stepTransfer &&
-				j.inflight < s.settings.MaxPartsPerFile && j.hasPendingPart() {
+				j.inflight < s.settings.MaxPartsPerFile && j.dispatchable() {
 				s.startPart(j)
 				started = true
 			}

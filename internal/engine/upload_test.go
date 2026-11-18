@@ -24,14 +24,6 @@ func TestNewRejectsIncompleteConfig(t *testing.T) {
 	}
 }
 
-func TestDownloadIsRejectedUntilItsStage(t *testing.T) {
-	h := newHarness(t, options{})
-	_, err := h.engine.Submit(context.Background(), engine.JobSpec{Direction: engine.Download, Ref: testRef})
-	if !errors.Is(err, engine.ErrDownloadUnsupported) {
-		t.Fatalf("got %v", err)
-	}
-}
-
 func TestCleanUploadSendsEveryPartOnce(t *testing.T) {
 	h := newHarness(t, options{})
 	id := h.submit()

@@ -22,6 +22,11 @@ const (
 	stepVerifySource
 	stepComplete
 	stepHeadRecover
+	// Download steps. stepPrepare heads the object for a download. All of these
+	// sort below stepJournalDelete, which the credential wait compares against.
+	stepJournalTemp
+	stepSinkPrepare
+	stepCommit
 	stepJournalDelete
 	stepFinish
 )
@@ -94,6 +99,14 @@ type job struct {
 	completeInFlight bool
 	composite        string
 
+	// Download state. See download.go.
+	etag       string
+	sink       SinkWriter
+	gate       *leadGate
+	lowest     int             // Lowest part not yet done.
+	partial    map[int32]int64 // Bytes already written for parts that were interrupted.
+	preempting int             // Preempted attempts that have not reported yet.
+
 	// Cleanup state.
 	clean           cleanStep
 	abortTries      int
@@ -135,6 +148,27 @@ func (j *job) partRange(i int) PartRange {
 // hasPendingPart reports whether a part can be dispatched now.
 func (j *job) hasPendingPart() bool {
 	return len(j.returned) > 0 || j.cursor < len(j.parts)
+}
+
+// nextIndex returns the index nextPart would remove. It requires hasPendingPart.
+func (j *job) nextIndex() int {
+	if len(j.returned) > 0 {
+		return int(j.returned[0])
+	}
+	return j.cursor
+}
+
+// dispatchable reports whether the scheduler may start a part of j now. A
+// download part beyond the lead gate waits for the frontier to advance. The
+// lowest unfinished part is always inside the gate, so this cannot deadlock.
+func (j *job) dispatchable() bool {
+	if !j.hasPendingPart() {
+		return false
+	}
+	if j.gate == nil || j.gate.lead <= 0 {
+		return true
+	}
+	return j.partRange(j.nextIndex()).Offset <= j.gate.frontier.Load()+j.gate.lead
 }
 
 // nextPart removes and returns the lowest-numbered pending part.
@@ -181,6 +215,7 @@ func (j *job) resetRun() {
 	j.abortTries = 0
 	j.keepJournal = false
 	j.cancelRequested = false
+	j.etag, j.sink, j.gate, j.lowest, j.partial, j.preempting = "", nil, nil, 0, nil, 0
 	j.transferred.Store(0)
 	j.reportedBytes = 0
 	j.rateBytes = 0

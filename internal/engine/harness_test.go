@@ -63,6 +63,7 @@ type harness struct {
 	t       *testing.T
 	server  *fakes3.Server
 	source  *fakes3.Source
+	sink    *fakes3.Sink
 	journal *journal.FileStore
 	dir     string
 	prober  *scriptedProber
@@ -79,6 +80,8 @@ type options struct {
 	wrap func(engine.ObjectStore) engine.ObjectStore
 	// journal replaces the file journal given to the engine.
 	journal func(journal.Store) journal.Store
+	// sink replaces the synthetic sink given to the engine.
+	sink engine.Sink
 	// discardProgress drops batches, so that memory tests do not measure them.
 	discardProgress bool
 }
@@ -118,6 +121,11 @@ func newHarness(t *testing.T, opts options) *harness {
 		prober: new(scriptedProber), obs: new(recordingObserver),
 	}
 	h.source.Set(testPath, fakes3.SyntheticFile{Size: testSize, Seed: testSeed})
+	h.sink = fakes3.NewSink(func(string) uint64 { return testSeed })
+	var sink engine.Sink = h.sink
+	if opts.sink != nil {
+		sink = opts.sink
+	}
 
 	settings := engine.DefaultSettings()
 	settings.PartSize = testPartSize
@@ -146,7 +154,7 @@ func newHarness(t *testing.T, opts options) *harness {
 		observer = discardObserver{}
 	}
 	h.engine, err = engine.New(engine.Config{
-		Store: objectStore, Source: h.source, Sink: fakes3.NewSink(func(string) uint64 { return testSeed }),
+		Store: objectStore, Source: h.source, Sink: sink,
 		Journal: journalStore, Prober: h.prober, Clock: engine.RealClock{}, Observer: observer, Guard: guard,
 		Jitter: func() float64 { return 0.5 }, Settings: settings, Retry: retry, Timeouts: timeouts,
 	})

@@ -229,15 +229,16 @@ func ambiguousHead(head *engine.OpError, cause error) error {
 	}
 }
 
-// GetObjectRange implements engine.ObjectStore. GetRangeRequest does not carry the
-// object's size, so If-Match and the ETag check stand in for comparing the total.
+// GetObjectRange implements engine.ObjectStore. It checks the status, the ETag and
+// the whole Content-Range, including the total against req.Size. A different ETag
+// or total means the object changed, which is permanent.
 func (s *Store) GetObjectRange(ctx context.Context, req engine.GetRangeRequest) (engine.GetRangeResult, error) {
 	const op = "GetObject"
 	client, err := s.clients(ctx, req.Ref)
 	if err != nil {
 		return engine.GetRangeResult{}, toOpError(op, err)
 	}
-	if req.Offset < 0 || req.Length <= 0 {
+	if req.Offset < 0 || req.Length <= 0 || req.Size <= 0 || req.Offset+req.Length > req.Size {
 		return engine.GetRangeResult{}, &engine.OpError{Op: op, Class: engine.ClassPermanent, Err: engine.ErrInvalidSize}
 	}
 	last := req.Offset + req.Length - 1
@@ -261,18 +262,31 @@ func (s *Store) GetObjectRange(ctx context.Context, req engine.GetRangeRequest) 
 		return engine.GetRangeResult{}, &engine.OpError{Op: op, Class: engine.ClassPermanent,
 			Err: fmt.Errorf("%w: ETag %s, expected %s", engine.ErrObjectChanged, etag, req.IfMatch)}
 	}
-	if err := checkContentRange(aws.ToString(out.ContentRange), req.Offset, last); err != nil {
+	if err := checkContentRange(aws.ToString(out.ContentRange), req.Offset, last, req.Size); err != nil {
 		_ = out.Body.Close()
-		return engine.GetRangeResult{}, &engine.OpError{Op: op, Class: engine.ClassRetryable, Err: err}
+		class := engine.ClassRetryable
+		if errors.Is(err, engine.ErrObjectChanged) {
+			class = engine.ClassPermanent
+		}
+		return engine.GetRangeResult{}, &engine.OpError{Op: op, Class: class, Err: err}
 	}
 	return engine.GetRangeResult{Body: out.Body}, nil
 }
 
-// checkContentRange verifies "bytes <first>-<last>/<total>".
-func checkContentRange(header string, first, last int64) error {
+// checkContentRange verifies "bytes <first>-<last>/<total>". A malformed header or
+// a different range is a broken response and is retried. A different total means
+// the object was replaced.
+func checkContentRange(header string, first, last, size int64) error {
 	want := fmt.Sprintf("bytes %d-%d/", first, last)
 	if !strings.HasPrefix(header, want) {
 		return fmt.Errorf("s3x: Content-Range %q does not match the requested range %d-%d: %w", header, first, last, io.ErrUnexpectedEOF)
+	}
+	total, err := strconv.ParseInt(strings.TrimPrefix(header, want), 10, 64)
+	if err != nil {
+		return fmt.Errorf("s3x: Content-Range %q has no usable total: %w", header, io.ErrUnexpectedEOF)
+	}
+	if total != size {
+		return fmt.Errorf("%w: Content-Range total %d, expected %d", engine.ErrObjectChanged, total, size)
 	}
 	return nil
 }

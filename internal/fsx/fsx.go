@@ -1,6 +1,7 @@
-// Package fsx holds local filesystem contracts: download write strategies,
-// temporary file naming and no-replace finalization. Windows-specific
-// implementations live in files with a _windows.go suffix, added in stage 0.5.
+// Package fsx holds local filesystem contracts and their implementations:
+// download write strategies, temporary file naming, free-space queries and
+// no-replace finalization. Windows-specific code lives in _windows.go files, and
+// everything else builds on every platform.
 package fsx
 
 import (
@@ -33,6 +34,19 @@ const (
 	// SeManageVolumePrivilege and is used only when the process holds it.
 	StrategyValidData = "valid-data"
 )
+
+// Finisher is an optional interface of a WriteTarget. The sink calls Finish once,
+// after the last write and before Sync, so that a strategy can undo what it did
+// at Create, such as clearing the NTFS sparse attribute.
+type Finisher interface {
+	Finish() error
+}
+
+// Leader is an optional interface of a WriteTarget whose MaxLead differs from
+// its strategy's, because Create had to fall back to another method.
+type Leader interface {
+	MaxLead() int64
+}
 
 // WriteTarget is an open temporary file. WriteAt is safe for concurrent use on
 // non-overlapping ranges.

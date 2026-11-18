@@ -234,3 +234,140 @@ go test -race -count=1 -timeout 0 -v -run '^TestSimulated2TiBUpload$' ./internal
 ### Next
 
 Stage 0.5 (download path and NTFS write strategies) starts from this commit. It is not started here.
+
+## Stage 0.5: download path and NTFS write strategies
+
+**Status:** done. `go build ./...`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...` and `staticcheck ./...` pass. `GOOS=darwin go vet` passes for engine, journal, fsx, s3x and fakes3. No AWS calls were made and `~/.aws` was not read. The 300 GiB comparison ran on this machine's F: drive. `F:\s4browser-bench\` is left empty, because the tools refused to delete the empty directory itself (see "Left for you").
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Download path: prepare, journal, sink, parts, lead gate, commit, cleanup | `internal/engine/download.go`, small hooks in `upload.go`, `job.go`, `scheduler.go` |
+| Production `engine.Sink` (free space, collisions, temp file, commit) | `internal/engine/filesink.go` |
+| Write strategies, finalizer, free space | `internal/fsx/portable.go`, `strategy_windows.go`, `strategy_other.go`, `rename_link.go` |
+| Benchmark | `internal/engine/dlbench_test.go` (+ `_windows`, `_other`) |
+| Tests | `download_test.go`, `bigdl_test.go`, `internal/fsx/strategy_test.go`, `strategy_windows_test.go` |
+
+`ErrDownloadUnsupported` is gone. `engine.StatsProvider` (not part of `Engine`) exposes the lead gate counters.
+
+### Contract changes
+
+- **`GetRangeRequest.Size`**, the one change the stage was allowed: the adapter compares it with the `Content-Range` total. A different total is `ErrObjectChanged`. A request without a size is `ErrInvalidSize`. `s3x` and `fakes3` both enforce it. Design section 8 is updated.
+- Additive, nothing existing changed: `fsx.Finisher`, `fsx.Leader`, `fsx.NewStrategy`, `fsx.DefaultStrategy`, `fsx.NewFinalizer`, `fsx.FreeSpace`, `fsx.ErrUnsupportedStrategy`, `engine.NewFileSink`, `engine.FreeSpaceReserve`, `engine.FormatBytes`.
+- Design section 8 now records the step order, the accounting check before commit, the lead gate details and the cleanup rules.
+
+### Behaviour worth knowing
+
+- **Writes inside the lowest unfinished part are always allowed through the lead gate.** Without that rule, a lead smaller than a part parks the one part that must finish first, and the job hangs. A test pins it, and it hangs when the rule is removed.
+- **A parking attempt nudges the scheduler.** Parking is not a scheduler event, so without the nudge a lowest part waiting for a slot would never trigger preemption. Removing preemption makes `TestLeadGateCompletesWithoutDeadlock` hang.
+- **A disk write parks the attempt,** so a 10-second drive stall is not taken for a dead connection. All three 300 GiB runs finished with zero retries, although the worst stall was 9.7 s.
+- **Before commit, the engine requires `DoneBytes == TotalBytes`.** A mismatch fails the job instead of committing a file that may have a hole.
+- **`Sink` and commit errors are `ErrLocalIO`** (permanent), with `ErrInsufficientSpace` and `ErrDestinationExists` still matchable. A disk error is never retried.
+- **If the volume has no sparse files** (FAT, exFAT, some shares), the sparse strategy falls back to a preallocated file whose `fsx.Leader` reports `DefaultLead`, so the gate still bounds the zero-fill. Tested by injecting the failure.
+- **Clearing the sparse attribute at commit is best effort.** A failure leaves a complete file that keeps the attribute, and does not fail the job.
+- **Commit cannot be interrupted** once it is syncing, so `Close` waits for it (2 to 6 seconds at 300 GiB here). A user cancel is deferred during finalizing, as for Complete.
+- `FileSink.Prepare` requires an absolute destination. Validation of the path itself is stage 2.3.
+
+### Strategy comparison
+
+**Method.** `TestDownloadWriteBenchmark` runs the real engine (scheduler, lead gate, file sink) against the in-process fake S3. The fake generates data far faster than 5 Gbps, so the disk is the bottleneck, and the writes arrive as the scheduler produces them: 16 parts of 64 MiB of one file in flight, each at its own offset, in 1 MiB writes. It records every write's latency, the longest gap with no write completing anywhere (worst stall), per-second throughput, heap and peak working set every 100 ms, and the time of Create, clearing the sparse attribute, Sync and Commit. It then verifies content: the whole file up to 32 GiB, and 2,000 random MiB plus both ends above that. It refuses any directory outside `F:\s4browser-bench` and removes only the files it created, including after a failure.
+
+```powershell
+$env:S4_BENCH_DIR = 'F:\s4browser-bench'; $env:S4_BENCH_SIZE = '16GiB'; $env:S4_BENCH_STRATEGY = 'sparse'
+$env:S4_BENCH_LEAD = '2GiB'          # only for sequential-lead and preallocate
+$env:S4_BENCH_MINFREE = '350GiB'     # for the full-size runs
+$env:S4_BENCH_RESULTS = "$env:TEMP\bench.jsonl"   # one JSON line per run
+go test -count=1 -v -run TestDownloadWriteBenchmark ./internal/engine
+```
+
+Also `S4_BENCH_RATE` (feed limit in bytes per second), `S4_BENCH_PART`, `S4_BENCH_FILES` and `S4_BENCH_PARTS`. The raw result lines of this stage are in the shared notes folder, in `stage05-full-300GiB.jsonl` and `stage05-small-runs.jsonl`.
+
+**Machine.** Ryzen 9 9950X3D, 93 GB RAM, F: is a T-FORCE TM8FFE512G (512 GB NVMe, NTFS). The process is not elevated, so `valid-data` could not be tried: `SeManageVolumePrivilege` is not in its token, and the code never raises privileges. It is implemented, and tested to fail cleanly.
+
+**Full size: 300 GiB (322 GB), one run each, unpaced feed.** The runs went in this order and took 8 to 16 minutes each, with more than 350 GiB free before each.
+
+| | sparse | sequential-lead (2 GiB) | preallocate (2 GiB) |
+|---|---|---|---|
+| Sustained throughput, whole run | **618 MiB/s (5.2 Gbps)** | 334 MiB/s (2.8 Gbps) | 333 MiB/s (2.8 Gbps) |
+| First third / last third of the run's time | 1,293 / 275 MiB/s | 581 / 209 MiB/s | 584 / 207 MiB/s |
+| Slowest 10 s window | 7 MiB/s | 121 MiB/s | 122 MiB/s |
+| Worst stall (no write completes anywhere) | 9.7 s | 1.6 s | 1.8 s |
+| Longest single write | 9.8 s | 2.6 s | 2.2 s |
+| p50 / p99 / p99.9 write latency | 6 / 210 / 1,913 ms | 5 / 540 / 913 ms | 5 / 547 / 1,093 ms |
+| Peak Go heap growth | 32 MiB | 27 MiB | 26 MiB |
+| Peak working set | 48 MiB | 46 MiB | 45 MiB |
+| Time to finalize (commit) | 5.7 s (clear attribute 4.9 s, sync 0.8 s) | 3.6 s (sync) | 2.3 s (sync) |
+| Extents of the finished file | 255 | 6 | 1 |
+| Retries, parks | 0, 0 | 0, 0 | 0, 0 |
+
+**Smaller runs on the same drive.** The whole file fits in the RAM cache, so the drive is not the limit:
+
+| Run | sparse | sequential-lead | preallocate |
+|---|---|---|---|
+| 16 GiB unpaced, lead 1 GiB | 2,302 MiB/s, p99 19 ms | 1,304 MiB/s, p99 205 ms | 1,274 MiB/s, p99 247 ms |
+| 64 GiB unpaced, lead 2 GiB | 2,537 MiB/s, p99 31 ms | 1,243 MiB/s, p99 123 ms | 1,228 MiB/s, p99 121 ms |
+| 24 GiB paced at 5 Gbps (625 MB/s) | **598 MiB/s**, p99 0.6 ms, worst stall 24 ms | 546 MiB/s, p99 145 ms, stall 247 ms | 539 MiB/s, p99 129 ms, stall 206 ms |
+
+At a 5 Gbps feed (596 MiB/s), only sparse kept up. The other two fell about 9% short even with the drive idle.
+
+**Why.** NTFS zero-fills the gap below a write that starts past the valid data length, and that is the first write of every part when parts run side by side. The gap-filling strategies therefore write up to a part's worth of zeros per part. Preallocating the end of file does not help, which matches the rule: it moves the end of file, not the valid data length, and the two strategies measured the same. A sparse file has no clusters in the gap, so nothing is zero-filled. A unit test shows it: 1 MiB written 255 MiB into a sparse file allocates under 8 MiB.
+
+**Choice.** **`sparse` is the default (`fsx.DefaultStrategy`).** It is 1.85 times faster over 300 GiB and 1.8 to 2 times faster at cache speed, it is the only one that held 5 Gbps in the paced run, and it needs no lead, so a download never parks a connection.
+
+**Limits of this measurement. Read these before trusting the numbers.**
+
+1. **This SSD runs out of fast cache.** The first third of the sparse run's time carried about 70% of the data. The last third ran at 275 MiB/s (2.2 Gbps), well under the 5 Gbps goal, and the other two at about 208 MiB/s. Sparse's whole-run 5.2 Gbps is the average of a fast start and a slow end. A 300 GB download to this drive will not sustain 5 Gbps with any write strategy. That is the drive. Stage 0.7 should repeat the comparison on the NVMe drive the media really lives on, which may be a different model.
+2. **The worst stall is larger for sparse (9.7 s against 1.6 s).** It happened in the slow phase, when the drive flushed its cache, after sparse had pushed about twice as much data into it. Sparse's p99 write latency is better than the others' (210 ms against 540 ms), but a user could see a ten-second pause. The watchdog does not fire for it, because a write parks the attempt.
+3. **One run per strategy, in a fixed order** (sparse first), to limit wear on the SSD. Drive state differs between runs: garbage collection and wear levelling, and the file system after 300 GiB was deleted. I did not repeat runs or randomise the order. The 1.85 times gap is much larger than the spread between near-identical small runs (the three lead settings of one strategy at 16 GiB differ by under 5%), but it is not a confidence interval.
+4. **The feed is in-process.** No TLS, no network stack and no S3 timing, so the CPU is free for the disk, and all parts progress at the same speed. Real parts finish more unevenly, which spreads the writes further. That should hurt the gap-filling strategies more, not less.
+5. **Process memory only.** The kernel's file cache (the dirty pages of a 300 GiB file) is not counted in the 45 to 48 MiB working set, and this machine has 93 GB of it. A machine with little RAM would flush earlier and stall sooner.
+6. **Read-back verification of the 300 GiB files was sampled** (2,000 random MiB and both ends), not complete. Files up to 32 GiB were verified in full, and so was every strategy in the unit tests.
+
+### MaxLead
+
+`sparse` needs none. For the fallback strategies the default is `fsx.DefaultLead` = **2 GiB**, chosen from the park counts (in-process feed, 16 parts of 64 MiB, so a 1 GiB spread):
+
+| Lead | Parks in 16 GiB | Longest park |
+|---|---|---|
+| 256 MiB | 212 to 215 | 99 to 132 ms |
+| 1 GiB | 25 to 28 | 7 to 15 ms |
+| 2 GiB and 4 GiB | 0 | none |
+
+Two GiB covers the default spread with room for 128 MiB parts. With larger parts (210 MiB at 2 TiB, so 3.4 GiB for 16 parts) the gate does park. The 2 TiB simulated download with a 3 GiB lead had 12 parks of at most 67 ms. **Not measured:** how long S3 lets a connection sit unread before it closes it, because there is no real S3 until stage 0.7. A parked attempt that loses its connection simply retries and resumes where it stopped, so it costs a request, not data. If stage 0.7 finds long parks, size the lead from `MaxPartsPerFile * PartSize` in the wiring instead of changing the gate.
+
+### Tests
+
+Against `internal/fakes3`. All pass under `-race`, and each ends by asserting that no goroutines leaked.
+
+| Requirement | Test |
+|---|---|
+| 2 TiB download, verified content, bounded memory, synthetic sink | `TestSimulated2TiBDownload`: 9,987 parts, every byte checked against the pattern and written once, heap growth 42 MiB against a 105 MiB limit, about 2 min on 16 cores. A `-race` run moves 32 GiB. `S4_RACE_FULL_2TIB=1` with `-timeout 0` moves the full 2 TiB |
+| Each fault type behaves as designed | `TestDownloadFaults`: 500, 503, SlowDown with Retry-After, reset mid-body, truncated body, stall (watchdog), slow response. `TestDownloadWaitsForCredentialsAndResumes` for an expired token. `TestRetryBudgetEndsDownload` |
+| Changed ETag fails clearly, no final file | `TestChangedETagFailsAndLeavesNoFile` (real files, directory empty afterwards), `TestChangedSizeIsObjectChanged`, and the `Content-Range` total case in `s3x` |
+| Finished ranges are not fetched again | Every faulted part is requested twice, and the second request starts inside the part and ends at its end. Every byte is written exactly once |
+| Cancel leaves no temp file | `TestCancelLeavesNoTempFile` |
+| Journal entry before the temp file exists | `TestTempFileIsJournaledBeforeItExists` |
+| Free space, collisions | `TestInsufficientSpaceFailsClearly`, `TestExistingDestinationIsNeverReplaced`, `TestDestinationAppearingBeforeCommitIsKept` |
+| Gate, pause, bandwidth, progress | `TestLeadGate*`, `TestLeadSmallerThanAPartCannotStopTheLowestPart`, `TestPauseAndResumeDownload`, `TestDownloadHonoursBandwidthLimit`, `TestDownloadProgressIsBatched` |
+| Real files | `TestDownloadFileStrategies`: each strategy, byte for byte |
+
+**Tests of the tests.** Seven deliberate bugs were each caught: ignoring partial progress, dropping `If-Match`, skipping the temp-file abort, removing preemption, ignoring the lowest part in the gate, removing the free-space check, and removing the `Content-Range` total check in `s3x`.
+
+### Open risks
+
+- **Real S3 is still unverified until stage 0.7,** now including ranged GET behaviour: the `Content-Range` format, idle connection closing while parked, and `If-Match` with multipart ETags.
+- **This SSD cannot sustain 5 Gbps for a 300 GB write** (limit 1 above). The target of stage 0.7 needs the real media drive, and a download to a slower drive will be disk-bound.
+- **A sparse download leaves up to 255 extents** at 300 GiB. That is harmless for reading here. It was not tried with a defragmenter or a backup tool.
+- **`journal.Recoverer` does not exist yet** (stage 2.1), so a crash during a large download leaves a temp file and a `download-temp` entry that nothing cleans up.
+- **Small downloads are not journaled,** as designed, so a crash can leave a small `~s4-*.s4tmp` file.
+- **Commit blocks `Close`** while it syncs.
+- `engine.StatsProvider` counters are cumulative and never reset.
+
+### Left for you
+
+- **`F:\s4browser-bench\` still exists and is empty.** The benchmark removed everything it created, and the directory was empty at the end. My tools refused to remove the directory itself. Delete it with `rmdir F:\s4browser-bench`. Nothing else on F: was touched, and the sample `.mkv` was not used.
+
+### Next
+
+Stage 0.6 (`s4engine` CLI and file-drop window) starts from this commit. It is not started here. Use `engine.NewFileSink(fsx.DefaultStrategy())` for downloads.

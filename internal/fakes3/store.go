@@ -77,7 +77,7 @@ func (m *memStore) HeadObject(ctx context.Context, ref engine.ObjectRef) (engine
 }
 
 func (m *memStore) GetObjectRange(ctx context.Context, req engine.GetRangeRequest) (engine.GetRangeResult, error) {
-	if req.Length <= 0 || req.Offset < 0 {
+	if req.Length <= 0 || req.Offset < 0 || req.Size <= 0 || req.Offset+req.Length > req.Size {
 		return engine.GetRangeResult{}, &engine.OpError{Op: string(OpGet), Class: engine.ClassPermanent, Err: engine.ErrInvalidSize}
 	}
 	in := getIn{info: infoOf(req.Ref), rng: &byteRange{start: req.Offset, end: req.Offset + req.Length - 1}, ifMatch: req.IfMatch}
@@ -91,6 +91,13 @@ func (m *memStore) GetObjectRange(ctx context.Context, req engine.GetRangeReques
 			}
 		}
 		return engine.GetRangeResult{}, opErr(OpGet, err)
+	}
+	if out.meta.size != req.Size {
+		_ = out.body.Close()
+		return engine.GetRangeResult{}, &engine.OpError{
+			Op: string(OpGet), Class: engine.ClassPermanent, RequestID: "fakes3-inproc",
+			Err: fmt.Errorf("%w: object is %d bytes, expected %d", engine.ErrObjectChanged, out.meta.size, req.Size),
+		}
 	}
 	return engine.GetRangeResult{Body: out.body}, nil
 }

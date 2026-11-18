@@ -365,7 +365,7 @@ func TestObjectChangesBetweenRangedGets(t *testing.T) {
 		t.Fatalf("second ranged GET: %v", err)
 	}
 	// Through the engine's store the 412 is ErrObjectChanged, a permanent error.
-	_, err = s.Store().GetObjectRange(ctx, engine.GetRangeRequest{Ref: engine.ObjectRef{Bucket: DefaultBucket, Key: "obj"}, Offset: 0, Length: 10, IfMatch: etag})
+	_, err = s.Store().GetObjectRange(ctx, engine.GetRangeRequest{Ref: engine.ObjectRef{Bucket: DefaultBucket, Key: "obj"}, Offset: 0, Length: 10, IfMatch: etag, Size: 1000})
 	if !errors.Is(err, engine.ErrObjectChanged) || engine.Classify(err) != engine.ClassPermanent {
 		t.Fatalf("store: %v", err)
 	}
@@ -490,7 +490,7 @@ func TestInProcessStoreRoundTripAndFaults(t *testing.T) {
 	if err != nil || head.Size != size || head.ChecksumCRC32 != want {
 		t.Fatalf("head %+v %v", head, err)
 	}
-	res, err := store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 5*mib - 4, Length: 8, IfMatch: head.ETag})
+	res, err := store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 5*mib - 4, Length: 8, IfMatch: head.ETag, Size: head.Size})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -77,6 +77,11 @@ type GetRangeRequest struct {
 	Offset  int64
 	Length  int64
 	IfMatch string
+	// Size is the object's total size from HeadObject. The implementation
+	// compares it with the total in the response's Content-Range and returns
+	// ErrObjectChanged if they differ. It must be positive, because a zero-byte
+	// object is never fetched.
+	Size int64
 }
 
 // GetRangeResult is an open ranged response. The caller closes Body. The

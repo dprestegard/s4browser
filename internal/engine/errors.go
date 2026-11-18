@@ -98,8 +98,6 @@ var (
 	ErrInvalidSettings = errors.New("engine: invalid settings")
 	// ErrInvalidConfig means New was given an unusable Config.
 	ErrInvalidConfig = errors.New("engine: invalid config")
-	// ErrDownloadUnsupported rejects download jobs until stage 0.5 adds that path.
-	ErrDownloadUnsupported = errors.New("engine: downloads are not implemented")
 )
 
 // OpError is the only error type ObjectStore implementations return for a

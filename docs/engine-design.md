@@ -297,9 +297,19 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 5. **Commit:** `SinkWriter.Commit` syncs, closes and renames without replacing.
 6. **Journal delete:** `Store.Delete`.
 
-**Response checks in the adapter:** status 206, `Content-Range` start and end equal to the request, and ETag equal to the recorded ETag. `GetRangeRequest` has no size field, so stage 0.4 relies on `If-Match` and the ETag instead of comparing the total. Stage 0.5 should add the field if it wants the total checked. A total or ETag difference or a 412 returns `ErrObjectChanged`, which is permanent. A short body is `io.ErrUnexpectedEOF`, which is retryable.
+**Response checks in the adapter:** status 206, `Content-Range` start and end equal to the request, the `Content-Range` total equal to `GetRangeRequest.Size`, and ETag equal to the recorded ETag. A total or ETag difference or a 412 returns `ErrObjectChanged`, which is permanent. A malformed `Content-Range` or a short body is `io.ErrUnexpectedEOF`, which is retryable. `Size` must be positive, because a zero-byte object is never fetched, and a request without it is rejected as `ErrInvalidSize` before it is sent. This field was added in stage 0.5, and `s3x` and `fakes3` both enforce it.
 
-**Mid-part retry:** the part records bytes written. A retry requests only the remaining range, so finished bytes are not fetched again.
+**Mid-part retry:** an attempt reports the bytes it wrote, and the scheduler keeps them in `job.partial`, a map that holds only parts that were interrupted part-way (a few at most, so it is outside the memory formula). The next attempt requests `[offset+written, end)`. An attempt writes what it has read before it returns an error, so a reset loses nothing that arrived. Written bytes count toward `DoneBytes` at once and are never rolled back, unlike an upload part.
+
+**Steps** (stage 0.5, `internal/engine/download.go`): `stepPrepare` heads the object, rejects an empty ETag and plans parts. `stepJournalTemp` runs only at `JournalTempMinSize` or more. `stepSinkPrepare` creates the temp file. `stepTransfer` follows. `stepCommit` runs `SinkWriter.Commit` under the engine's context, not the job's, so a user cancel during finalizing is deferred as it is for Complete. A committed job skips straight to `stepFinish` when nothing was journaled, and otherwise to `stepJournalDelete`.
+
+**Accounting check:** before commit the engine requires `DoneBytes == TotalBytes`. Every byte is written exactly once, so a different count is an engine bug, and the job fails with `ErrLocalIO` instead of committing a file that may have a hole.
+
+**Local errors:** `Sink.Prepare` and `Commit` errors are wrapped in `ErrLocalIO`, which is permanent, unless they are cancellations. `ErrInsufficientSpace` and `ErrDestinationExists` stay matchable through the wrapper. A failed write is `ErrLocalIO` as well. A disk error is never retried.
+
+**Cleanup:** cancel and failure call `SinkWriter.Abort` with the same retry policy as an upload abort. If it still fails, `keepJournal` is set and `JobSnapshot.Warning` says so. An aborted job whose temp file is gone leaves no journal entry.
+
+**Free space:** `FileSink.Prepare` requires `size + FreeSpaceReserve` (64 MiB) free for the user on the volume (`fsx.FreeSpace`, quota-aware) and fails with `ErrInsufficientSpace` and a message that names the needed, reserved and available amounts. It runs before any bytes are fetched.
 
 **Zero-byte objects** send no GET. Prepare and commit an empty file.
 
@@ -317,6 +327,15 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 - An attempt that would write beyond `frontier + MaxLead` parks until the frontier advances. It calls `AttemptActivity.Park` so the watchdog ignores the wait.
 
 **Preemption prevents deadlock:** parked attempts could fill every slot while the lowest part waits to be dispatched. If the job's lowest unfinished part is pending and cannot be dispatched, the scheduler cancels the job's highest-offset parked attempt with `ErrPartPreempted`. Its written bytes are kept.
+
+**Implementation notes (stage 0.5):**
+
+- The frontier is kept at part granularity: the start of the lowest part that is not done. It lives in a `leadGate` per job, with an atomic `limit` that attempts read without a lock. Only an attempt that must wait takes the gate's mutex.
+- **Writes inside the lowest part are always allowed.** Without this, a lead smaller than a part would park the one part that has to finish first, and nothing could ever advance. The limit is `max(frontier+MaxLead, lowestPartEnd-1)`.
+- A parking attempt nudges the scheduler loop through a one-slot channel. Without it the loop would not look again, because parking is not a scheduler event, and a lowest part waiting for a slot would never trigger preemption.
+- At most one preemption per job is outstanding. The attempt reports whether the gate preempted it, which is more reliable than the context's cause, because the job may have cancelled the attempt first.
+- Disk writes park the attempt, so a slow disk is not mistaken for a stalled connection.
+- `engine.StatsProvider.DownloadStats` counts parks, their total and longest duration and preemptions. It is outside the `Engine` contract.
 
 ## 9. Data path hooks
 
@@ -431,6 +450,6 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 |---|---|
 | **0.3** | `internal/fakes3`: `engine.ObjectStore` in process and an HTTPS server, synthetic pattern, scriptable faults (status codes, resets, stalls, expired credentials, lost Complete responses), the guard decorator, `engine.Clock` fake, synthetic `Source` and `Sink` |
 | **0.4** | `engine.New` and `engine.Engine`: scheduler, attempts, metered body, watchdog, limiter, progress, upload path. `internal/s3x` `ObjectStore` and transport. File `Source`. `journal.Store` file implementation with the lock. Memory and goroutine-leak tests |
-| **0.5** | Download path in the engine. `fsx.WriteStrategy` implementations and `fsx.Finalizer` with `_windows.go` and portable variants. File `Sink`. Strategy comparison on a 300 GB file |
+| **0.5** | Download path in the engine. `fsx.WriteStrategy` implementations and `fsx.Finalizer` with `_windows.go` and portable variants. File `Sink`. Strategy comparison on a 300 GB file. Done: see `docs/progress.md` for the measured results and the default |
 | **0.6** | `cmd/s4engine` against `engine.Engine`, using the guard for every test run. Minimal Wails file-drop window |
 | **2.1** | `journal.Recoverer` and `journal.RemoteCleaner`. `engine.CredentialProber` in `internal/s3x`. Pause, resume and credential recovery hardened through the fault suite, including kill and relaunch |

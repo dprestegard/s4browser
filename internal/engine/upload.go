@@ -27,6 +27,11 @@ func (s *scheduler) startPart(j *job) {
 	s.activeParts++
 	s.busy++
 
+	if j.spec.Direction == Download {
+		s.startDownloadPart(j, index)
+		return
+	}
+
 	span := j.partRange(index)
 	ctx, cancel := context.WithCancelCause(j.ctx)
 	activity := new(AttemptActivity)
@@ -85,9 +90,7 @@ func encodeCRC32(sum uint32) string {
 }
 
 func (s *scheduler) onPartDone(j *job, index int, published int64, etag string, sum uint32, class Class, err error) {
-	j.inflight--
-	s.activeParts--
-	s.busy--
+	s.partReturned(j)
 	p := &j.parts[index]
 	span := j.partRange(index)
 
@@ -96,14 +99,32 @@ func (s *scheduler) onPartDone(j *job, index int, published int64, etag string, 
 		p.etag, p.crc = etag, sum
 		j.partsDone++
 		j.transferred.Add(span.Length - published)
-		j.lastProgress = s.cfg.Clock.Now()
-		j.dirty = true
-		s.requestSucceeded(j)
-		s.settle(j)
+		s.partSucceeded(j)
 		return
 	}
-
 	j.transferred.Add(-published)
+	s.partFailed(j, index, class, err)
+}
+
+// partReturned gives back the slot of a finished attempt.
+func (s *scheduler) partReturned(j *job) {
+	j.inflight--
+	s.activeParts--
+	s.busy--
+}
+
+// partSucceeded runs after a part is recorded as done.
+func (s *scheduler) partSucceeded(j *job) {
+	j.lastProgress = s.cfg.Clock.Now()
+	j.dirty = true
+	s.requestSucceeded(j)
+	s.settle(j)
+}
+
+// partFailed applies the error policy to a part whose attempt did not succeed.
+func (s *scheduler) partFailed(j *job, index int, class Class, err error) {
+	p := &j.parts[index]
+	span := j.partRange(index)
 	interrupt := func() {
 		setPart(p, PartEvInterrupt)
 		j.returnPart(index)
@@ -205,7 +226,11 @@ func (s *scheduler) advance(j *job) {
 	for {
 		switch j.step {
 		case stepPrepare:
-			s.startPrepare(j)
+			if j.spec.Direction == Download {
+				s.startPrepareDownload(j)
+			} else {
+				s.startPrepare(j)
+			}
 		case stepJournalIntent:
 			s.startJournalPut(j, journal.PhaseCreating)
 		case stepCreate:
@@ -219,6 +244,9 @@ func (s *scheduler) advance(j *job) {
 			}
 			j.phase = PhaseFinalizing
 			j.step = stepVerifySource
+			if j.spec.Direction == Download {
+				j.step = stepCommit
+			}
 			j.dirty = true
 			continue
 		case stepVerifySource:
@@ -227,6 +255,12 @@ func (s *scheduler) advance(j *job) {
 			s.startComplete(j)
 		case stepHeadRecover:
 			s.startHeadRecover(j)
+		case stepJournalTemp:
+			s.startJournalTemp(j)
+		case stepSinkPrepare:
+			s.startSinkPrepare(j)
+		case stepCommit:
+			s.startCommit(j)
 		case stepJournalDelete:
 			s.startJournalDelete(j)
 		case stepFinish:
@@ -350,8 +384,8 @@ func (s *scheduler) startJournalDelete(j *job) {
 		err := s.cfg.Journal.Delete(ctx, id)
 		return func() {
 			if err != nil {
-				// Next launch's abort gets NoSuchUpload and removes the entry.
-				j.addWarning("The transfer journal could not be updated, so this upload will be checked again at next launch.")
+				// Next launch's cleanup finds nothing left to do and removes the entry.
+				j.addWarning(journalWarning(j))
 			}
 			j.journaled = false
 			j.nextStep(stepFinish)
@@ -521,6 +555,14 @@ func (s *scheduler) cleanup(j *job) {
 	for {
 		switch j.clean {
 		case cleanAbort:
+			if j.spec.Direction == Download {
+				if j.sink == nil {
+					j.clean = cleanJournal
+					continue
+				}
+				s.startSinkAbort(j)
+				return
+			}
 			if j.uploadID == "" || j.uploadDone {
 				j.clean = cleanJournal
 				continue
@@ -580,12 +622,19 @@ func (s *scheduler) startCleanupDelete(j *job) {
 		err := s.cfg.Journal.Delete(ctx, id)
 		return func() {
 			if err != nil {
-				j.addWarning("The transfer journal could not be updated, so this upload will be checked again at next launch.")
+				j.addWarning(journalWarning(j))
 			}
 			j.journaled = false
 			j.clean = cleanFinish
 		}
 	})
+}
+
+func journalWarning(j *job) string {
+	if j.spec.Direction == Download {
+		return "The transfer journal could not be updated, so this download's temporary file will be checked again at next launch."
+	}
+	return "The transfer journal could not be updated, so this upload will be checked again at next launch."
 }
 
 // retire releases everything a job held once it reaches a terminal state.
@@ -597,7 +646,7 @@ func (s *scheduler) retire(j *job) {
 	if j.cancel != nil {
 		j.cancel(ErrJobCancelled)
 	}
-	j.parts, j.returned = nil, nil
+	j.parts, j.returned, j.partial, j.gate = nil, nil, nil, nil
 	s.releaseSlot(j)
 	s.open--
 }

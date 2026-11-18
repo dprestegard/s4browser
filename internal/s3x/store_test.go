@@ -437,7 +437,7 @@ func TestGetObjectRangeChecks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: mib, Length: 1024, IfMatch: info.ETag})
+	out, err := store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: mib, Length: 1024, IfMatch: info.ETag, Size: info.Size})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -452,9 +452,20 @@ func TestGetObjectRangeChecks(t *testing.T) {
 		t.Fatal("ranged bytes differ from the pattern")
 	}
 
-	_, err = store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 0, Length: 10, IfMatch: `"stale"`})
+	_, err = store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 0, Length: 10, IfMatch: `"stale"`, Size: info.Size})
 	if !errors.Is(err, engine.ErrObjectChanged) || engine.Classify(err) != engine.ClassPermanent {
 		t.Fatalf("stale ETag: %v", err)
+	}
+
+	// The right ETag with a different total is a changed object, not a retry.
+	_, err = store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 0, Length: 10, IfMatch: info.ETag, Size: info.Size + 1})
+	if !errors.Is(err, engine.ErrObjectChanged) || engine.Classify(err) != engine.ClassPermanent {
+		t.Fatalf("wrong total: %v", err)
+	}
+	// A request without a size is rejected before it is sent.
+	_, err = store.GetObjectRange(ctx, engine.GetRangeRequest{Ref: ref, Offset: 0, Length: 10, IfMatch: info.ETag})
+	if !errors.Is(err, engine.ErrInvalidSize) {
+		t.Fatalf("no size: %v", err)
 	}
 }
 
