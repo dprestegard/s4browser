@@ -12,6 +12,7 @@ frontend/dist/
 *.pem
 *.key
 credentials*
+!credentials*.go
 *.credentials
 secrets*.json
 .aws/
