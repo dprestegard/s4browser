@@ -841,3 +841,43 @@ Hands-on, `wails dev -tags devfake` driven through the dev server page with fake
 ### Next
 
 Stage 1.4 (virtualized browser table and navigation) starts from this commit. It is not started here.
+
+## Stage 1.4: virtualized browser table and navigation
+
+**Status:** done and not committed (waiting for the user's go-ahead). `wails build`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (also with `-tags devfake`) and `tsc --noEmit` pass. No AWS calls were made and `~/.aws` was not read: the hands-on run used temporary AWS files with fake values and the devfake S3.
+
+### What exists
+
+- **Virtualized table** (`frontend/src/shell/Browser.tsx`, `@tanstack/react-virtual` 3). Only the rows in view plus 12 of overscan are in the DOM (27 to 41 rows at 1440 × 900). Rows are fetched from Go with `ListingWindow` in blocks of 100, only for the blocks in view. They are refetched on `s4:listing` version changes and dropped on a sort change (placeholder rows show until the new block arrives). The page never holds more than a few blocks.
+- **Design kept.** Same row markup and `.cols`/`.trow`/`.thead` classes. Rows are placed with a transform inside `.vbody` (small additions at the end of the table section in `shell.css`; the pager CSS is gone). The row height is read from `--row-h` and follows the density setting (a `MutationObserver` on `data-density`).
+- **Selection** is a list of index ranges in the current sort order, so Ctrl+A over 100,000 rows is `[[0, 100039]]`. New Go binding `ListingSummary` (`browse.go`, `Service.Summarize` in `internal/browse/listing.go`, one test) totals count, folders, objects and bytes for the ranges, so unrendered rows never reach the page. `App.tsx` now holds a `SelectionInfo` (totals, plus the row when exactly one is selected) instead of `Row[]`; `Details.tsx` and the status bar use it.
+- **Keyboard:** click, Ctrl-click (splits or merges ranges), Shift-click, Ctrl+Shift-click, arrows with Shift to extend, PageUp/PageDown (a page minus two rows), Home/End, Ctrl+A, Ctrl+Space, Escape, Enter or double-click on a folder, Backspace or Alt+Up. The focused row stays in the DOM when scrolled out of view, so the keyboard focus is never lost to the page body.
+- **Navigation:** the back history and breadcrumb are unchanged. Each folder remembers its scroll position, focused row and selection (the selection only if the listing finished with the same row count and sort). After navigating, the listing takes the keyboard focus if the focus was in the listing or the path bar (not when it was in the bucket list).
+- **Accessibility:** `role="table"`, `row`, `cell`, `columnheader`, `rowgroup`, `aria-rowcount` (total + 1), `aria-rowindex` (header is 1), `aria-sort`, `aria-multiselectable`, a roving `tabindex` on rows, and `aria-busy` on rows not fetched yet.
+
+### Evidence
+
+`wails dev -tags devfake` driven through the dev server page, `dev-media/big/` (100,000 objects, 40 folders):
+
+- Scroll height 2,801,120 px at 28 px rows. A 100-step sweep from top to bottom, using real scroll events, rendered at most 41 rows and left no placeholder rows behind; the longest step took 19 ms. End and Home jump across the whole listing.
+- All four sorts, both directions: sort attribute and order correct (size ascending 0 B, 1 MiB, 2 MiB…; size descending 97.7 GiB first; modified; name descending reel40, reel39…). Folders stay first. A sort change was visible within 50 ms of the click except the first name-descending sort (460 ms, Go sorting 100,000 rows once).
+- Shift+End from row 28 selected 100,012 items: the status bar and details panel showed 100,000 objects, 12 folders and 4.66 PiB. Ctrl+A showed 100,040 items. Both came from `ListingSummary` and took no visible time.
+- Enter into a folder and Backspace or Alt+Up back, and the Back button: the scroll position (500,000 px), the selected row and the focus were restored. Focus moved into the listing after Enter.
+- Comfortable density (34 px rows) and the light theme render correctly. At 1024 × 640 and at 1440 × 900 there is no page scroll and the header stays sticky.
+
+### Behaviour worth knowing
+
+- **A selection is dropped when the sort order changes or when the listing grows** (a new version while loading), because index ranges only mean something for one order of one version. Folders being opened from a finished listing are not affected. Keeping a selection by key across a sort change would need a Go binding that maps keys to indices; it was not built.
+- The first row window for a folder is fetched after `OpenListing` returns, so while the listing is loading its first page the table is empty.
+
+### Not verified
+
+- **The built exe was not looked at.** Everything above ran in the dev server page in a browser pane, not in the WebView2 window. The pane was hidden during some runs, so animation-frame rates were not measured; "smooth" here means bounded DOM, no placeholder rows left and no long stalls, not a frame-rate figure.
+- Mouse-wheel and scrollbar dragging by hand were not tried (scroll was driven by script and real key presses).
+- Screen reader behaviour of the virtualized rows was not tested.
+- A selection that includes unfetched rows and then goes through a folder round trip was checked for one row only.
+- No automated frontend tests exist. The range helpers (`addRange`, `removeIndex`, `inRanges`) are the best candidates if tests are added.
+
+### Next
+
+Stage 2.1 (retry, pause, resume, credential recovery, orphan cleanup, Opus) is next in the plan. It is not started here.

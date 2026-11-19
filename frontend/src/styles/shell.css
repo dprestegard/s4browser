@@ -115,7 +115,12 @@
     font-size: var(--fs-small); color: var(--text3); white-space: nowrap; overflow: hidden;
 }
 .statusbar .strong { color: var(--text2); }
-.pager { display: flex; align-items: center; gap: 4px; }
+
+/* Virtualized rows: the body is as tall as all rows, visible rows are placed by transform. */
+.vbody { position: relative; }
+.vrow { position: absolute; top: 0; left: 0; width: 100%; box-sizing: border-box; }
+.skel { display: block; height: 10px; width: 40%; border-radius: 3px; background: var(--bg3); }
+.table-scroll:focus { outline: none; }
 
 /* Shown by Wails while files from Explorer are over the listing. */
 .drop-overlay {

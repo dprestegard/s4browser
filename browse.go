@@ -103,3 +103,13 @@ func (a *App) CloseListing(id string) {
 		s.CloseListing(id)
 	}
 }
+
+// ListingSummary totals a selection made of inclusive index ranges in the
+// given sort order, without sending the rows to the UI.
+func (a *App) ListingSummary(id string, field string, desc bool, ranges [][2]int) (browse.Summary, error) {
+	s, err := a.browser()
+	if err != nil {
+		return browse.Summary{}, err
+	}
+	return s.Summarize(id, browse.SortSpec{Field: browse.SortField(field), Desc: desc}, ranges)
+}

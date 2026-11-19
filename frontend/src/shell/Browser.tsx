@@ -1,48 +1,187 @@
-import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useRef, useState} from 'react';
-import {CloseListing, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
+import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
+import {CloseListing, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Icon} from '../ui/Icon';
 import {formatDate, formatSize, formatStorageClass, plural} from '../ui/format';
-import {ListingWindow, Location, Row, Snapshot, Sort, SortField} from '../types';
+import {ListingWindow, Location, noSelection, Row, SelectionInfo, Snapshot, Sort, SortField} from '../types';
+import {Density} from '../settings';
 
-// Rows are fetched from Go one page at a time; Go owns the listing and its sort.
-// Stage 1.4 replaces the pager with a virtualized table that asks only for the
-// visible rows.
-const pageSize = 200;
+// The table is virtualized: only the rows in view (plus a little overscan) exist
+// in the page, and only those rows are fetched from Go, in blocks. Go owns the
+// listing and its sort; the page never holds more than a few blocks of rows.
+const BLOCK = 100;
+const OVERSCAN = 12;
+const HEAD_H = 28;
 
-export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, selected, onSelect}: {
+// A selection is a list of sorted, non-touching, inclusive index ranges in the
+// current sort order, so Ctrl+A over 100,000 rows is one pair of numbers. Go
+// totals the ranges (ListingSummary). Ranges are only valid for one sort order
+// and one version of the listing, so they are dropped when either changes.
+type Range = [number, number];
+const noRanges: Range[] = [];
+
+function inRanges(ranges: Range[], i: number): boolean {
+    let lo = 0, hi = ranges.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (i < ranges[mid][0]) hi = mid - 1;
+        else if (i > ranges[mid][1]) lo = mid + 1;
+        else return true;
+    }
+    return false;
+}
+
+function addRange(ranges: Range[], a: number, b: number): Range[] {
+    const out: Range[] = [];
+    let from = Math.min(a, b);
+    let to = Math.max(a, b);
+    let placed = false;
+    for (const r of ranges) {
+        if (r[1] < from - 1) out.push(r);
+        else if (r[0] > to + 1) {
+            if (!placed) {
+                out.push([from, to]);
+                placed = true;
+            }
+            out.push(r);
+        } else {
+            from = Math.min(from, r[0]);
+            to = Math.max(to, r[1]);
+        }
+    }
+    if (!placed) out.push([from, to]);
+    return out;
+}
+
+function removeIndex(ranges: Range[], i: number): Range[] {
+    const out: Range[] = [];
+    for (const r of ranges) {
+        if (i < r[0] || i > r[1]) out.push(r);
+        else {
+            if (r[0] < i) out.push([r[0], i - 1]);
+            if (i < r[1]) out.push([i + 1, r[1]]);
+        }
+    }
+    return out;
+}
+
+const countRanges = (ranges: Range[], total: number) =>
+    ranges.reduce((n, [a, b]) => n + Math.max(0, Math.min(b, total - 1) - a + 1), 0);
+
+// The row height is a CSS token (it changes with the density setting), so the
+// virtualizer reads it instead of repeating the numbers.
+function readRowHeight(): number {
+    const v = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--row-h'));
+    return v > 0 ? v : 28;
+}
+
+type Memory = {scroll: number; focus: number; ranges: Range[]; count: number; sort: Sort};
+type Restore = {scroll: boolean; sel: boolean; mem: Memory};
+
+export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, onSelection, density}: {
     profileId: string;
     location: Location | null;
     onNavigate: (prefix: string) => void;
     canGoBack: boolean;
     onBack: () => void;
     onSnapshot: (s: Snapshot | null) => void;
-    selected: Row[];
-    onSelect: (rows: Row[]) => void;
+    onSelection: (s: SelectionInfo) => void;
+    density: Density;
 }) {
     const [snap, setSnap] = useState<Snapshot | null>(null);
-    const [rows, setRows] = useState<Row[]>([]);
     const [sort, setSort] = useState<Sort>({field: 'name', desc: false});
-    const [offset, setOffset] = useState(0);
     const [error, setError] = useState('');
     const [reload, setReload] = useState(0);
     const [focus, setFocus] = useState(0);
+    const [sel, setSel] = useState<{ranges: Range[]; basis: string}>({ranges: noRanges, basis: ''});
+    const [info, setInfo] = useState<SelectionInfo>(noSelection);
+    const [rowH, setRowH] = useState(readRowHeight);
+    const [, setTick] = useState(0);
+    const [restored, setRestored] = useState(0);
     const anchor = useRef(-1);
     const listingId = useRef('');
-    const tableRef = useRef<HTMLDivElement>(null);
+    const mainRef = useRef<HTMLElement>(null);
+    const scrollRef = useRef<HTMLDivElement>(null);
+    // Set when the focused row should take the keyboard focus as soon as it is on
+    // the page: after navigating, and after a key moved the focus. A wheel or
+    // pointer action on the table cancels it.
+    const pendingFocus = useRef(false);
+    const restore = useRef<Restore | null>(null);
+    const memory = useRef(new Map<string, Memory>());
+    const blocks = useRef(new Map<number, {stamp: string; rows: Row[]}>());
+    const inflight = useRef(new Set<string>());
+    const cacheKey = useRef('');
+    const stampRef = useRef('');
 
     const bucket = location?.bucket ?? '';
     const prefix = location?.prefix ?? '';
+    // The snapshot of the folder being shown; briefly stale right after navigating.
+    const current = !!snap && snap.bucket === bucket && snap.prefix === prefix;
+    const total = snap?.count ?? 0;
+    const version = snap?.version ?? -1;
+    const sortKey = `${snap?.id ?? ''}|${sort.field}|${sort.desc}`;
+    const stamp = `${sortKey}|${version}`;
+    stampRef.current = stamp;
+    // Row blocks belong to one listing and one sort order. A new version of the
+    // same order (more rows arrived) keeps the old blocks until they are refetched.
+    if (cacheKey.current !== sortKey) {
+        cacheKey.current = sortKey;
+        blocks.current.clear();
+        inflight.current.clear();
+    }
+    const ranges = sel.basis === stamp ? sel.ranges : noRanges;
+    const live = useRef({focus, ranges, sort, total});
+    live.current = {focus, ranges, sort, total};
 
-    // Open a listing whenever the location changes, and close the old one.
+    // Follow the density setting: --row-h is the single source of the row height.
+    useLayoutEffect(() => {
+        setRowH(readRowHeight());
+        const mo = new MutationObserver(() => setRowH(readRowHeight()));
+        mo.observe(document.documentElement, {attributes: true, attributeFilter: ['data-density']});
+        return () => mo.disconnect();
+    }, [density]);
+
+    const virtual = useVirtualizer({
+        count: total,
+        getScrollElement: () => scrollRef.current,
+        estimateSize: () => rowH,
+        overscan: OVERSCAN,
+        scrollMargin: HEAD_H,
+        scrollPaddingStart: HEAD_H,
+        // The focused row stays on the page when it scrolls out of view, so the
+        // keyboard focus is not lost to the body.
+        rangeExtractor: (range) => {
+            const base = defaultRangeExtractor(range);
+            const f = live.current.focus;
+            if (f < 0 || f >= range.count || (f >= range.startIndex - OVERSCAN && f <= range.endIndex + OVERSCAN)) return base;
+            return f < range.startIndex ? [f, ...base] : [...base, f];
+        },
+    });
+    useEffect(() => virtual.measure(), [rowH, virtual]);
+    const items = virtual.getVirtualItems();
+    // The rows to fetch: those in view plus the overscan, not the kept focused row.
+    const firstIdx = Math.max(0, (virtual.range?.startIndex ?? 0) - OVERSCAN);
+    const lastIdx = (virtual.range?.endIndex ?? 0) + OVERSCAN;
+
+    const getRow = (i: number): Row | undefined => blocks.current.get(Math.floor(i / BLOCK))?.rows[i % BLOCK];
+
+    // Open a listing whenever the location changes, and close the old one. The
+    // scroll position, focus and selection of the folder being left are kept so
+    // that going back to it is cheap.
     useEffect(() => {
-        setRows([]);
         setSnap(null);
         onSnapshot(null);
-        setOffset(0);
         setFocus(0);
         setError('');
+        setSel({ranges: noRanges, basis: ''});
         anchor.current = -1;
+        const active = document.activeElement;
+        pendingFocus.current = !active || active === document.body || !!mainRef.current?.contains(active);
+        const key = `${profileId}|${bucket}|${prefix}`;
+        const mem = memory.current.get(key);
+        restore.current = mem ? {scroll: mem.scroll > 0, sel: mem.ranges.length > 0, mem} : null;
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
         if (!bucket) return;
         let cancelled = false;
         OpenListing(profileId, bucket, prefix)
@@ -58,6 +197,13 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
             .catch((err) => !cancelled && setError(String(err)));
         return () => {
             cancelled = true;
+            const l = live.current;
+            if (l.total > 0) {
+                const m = memory.current;
+                m.delete(key);
+                m.set(key, {scroll: scrollRef.current?.scrollTop ?? 0, focus: l.focus, ranges: l.ranges, count: l.total, sort: l.sort});
+                if (m.size > 100) m.delete(m.keys().next().value as string);
+            }
             if (listingId.current) CloseListing(listingId.current);
             listingId.current = '';
         };
@@ -72,68 +218,165 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }), []);
 
-    // Fetch the page whenever the listing grows, or the sort or page changes.
-    const version = snap?.version ?? -1;
+    // Fetch the blocks around the visible rows that are missing or out of date.
     useEffect(() => {
-        const id = listingId.current;
-        if (!id) return;
-        FetchWindow(id, sort.field, sort.desc, offset, pageSize)
-            .then((w) => {
-                if (id === listingId.current) setRows((w as ListingWindow).rows ?? []);
-            })
-            .catch((err) => setError(String(err)));
-    }, [version, sort, offset]);
+        const id = snap?.id;
+        if (!id || total === 0) return;
+        const last = Math.min(lastIdx, total - 1);
+        for (let b = Math.floor(firstIdx / BLOCK); b <= Math.floor(last / BLOCK); b++) {
+            const have = blocks.current.get(b);
+            const tag = `${stamp}|${b}`;
+            if ((have && have.stamp === stamp) || inflight.current.has(tag)) continue;
+            inflight.current.add(tag);
+            FetchWindow(id, sort.field, sort.desc, b * BLOCK, BLOCK)
+                .then((w) => {
+                    inflight.current.delete(tag);
+                    if (stampRef.current !== stamp) return;
+                    blocks.current.set(b, {stamp, rows: (w as ListingWindow).rows ?? []});
+                    setTick((n) => n + 1);
+                })
+                .catch((err) => {
+                    inflight.current.delete(tag);
+                    setError(String(err));
+                });
+        }
+    }, [stamp, firstIdx, lastIdx, total, snap?.id, sort.field, sort.desc]);
 
-    const selectedKeys = new Set(selected.map((r) => r.key));
+    // Report the selection to the details panel and status bar. Go totals the
+    // ranges; a single row already on the page needs no request.
+    const reportToken = useRef(0);
+    useEffect(() => {
+        const token = ++reportToken.current;
+        const id = snap?.id;
+        const n = countRanges(ranges, total);
+        const done = (v: SelectionInfo) => {
+            if (token !== reportToken.current) return;
+            setInfo(v);
+            onSelection(v);
+        };
+        if (!id || n === 0) {
+            done(noSelection);
+            return;
+        }
+        const idx = ranges[0][0];
+        const cached = n === 1 ? getRow(idx) : undefined;
+        if (cached) {
+            done({count: 1, folders: cached.folder ? 1 : 0, objects: cached.folder ? 0 : 1, bytes: cached.folder ? 0 : cached.size, single: cached});
+            return;
+        }
+        Promise.all([
+            ListingSummary(id, sort.field, sort.desc, ranges),
+            n === 1 ? FetchWindow(id, sort.field, sort.desc, idx, 1) : Promise.resolve(null),
+        ]).then(([s, w]) => done({
+            count: s.count, folders: s.folders, objects: s.objects, bytes: s.bytes,
+            single: n === 1 ? ((w as ListingWindow | null)?.rows?.[0] ?? null) : null,
+        })).catch((err) => setError(String(err)));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [ranges, snap?.id, sort.field, sort.desc, total]);
+
+    // Come back to a folder as it was left: scroll position, focus, and the
+    // selection when the listing has the same rows in the same order.
+    useEffect(() => {
+        const r = restore.current;
+        const el = scrollRef.current;
+        if (!r || !snap || !current || snap.id !== listingId.current || !el) return;
+        if (r.scroll && (HEAD_H + total * rowH >= r.mem.scroll + el.clientHeight || snap.state !== 'loading')) {
+            el.scrollTop = r.mem.scroll;
+            r.scroll = false;
+        }
+        if (r.sel && snap.state === 'done') {
+            if (snap.count === r.mem.count && r.mem.sort.field === sort.field && r.mem.sort.desc === sort.desc) {
+                setSel({ranges: r.mem.ranges, basis: stamp});
+                setFocus(Math.min(r.mem.focus, Math.max(0, total - 1)));
+                setRestored((n) => n + 1);
+            }
+            r.sel = false;
+        }
+        if (!r.scroll && !r.sel) restore.current = null;
+    }, [snap?.state, total, rowH, stamp, sort.field, sort.desc]);
+
+    const moveFocus = (j: number) => {
+        setFocus(j);
+        pendingFocus.current = true;
+        virtual.scrollToIndex(j, {align: 'auto'});
+    };
+
+    // A restored focus moves the keyboard to its row, unless the user is elsewhere.
+    useEffect(() => {
+        const a = document.activeElement;
+        if (restored > 0 && (!a || a === document.body || mainRef.current?.contains(a))) pendingFocus.current = true;
+    }, [restored]);
+
+    // Give the focus to the focused row once it is on the page. After navigating
+    // this puts the keyboard in the new listing.
+    useEffect(() => {
+        if (!pendingFocus.current || (snap && (!current || snap.id !== listingId.current))) return;
+        const el = scrollRef.current;
+        if (!el) return;
+        if (total === 0) {
+            if (snap?.state === 'done') {
+                el.focus({preventScroll: true});
+                pendingFocus.current = false;
+            }
+            return;
+        }
+        const row = el.querySelector<HTMLElement>(`[data-index="${focus}"]`);
+        if (row) {
+            row.focus({preventScroll: true});
+            pendingFocus.current = false;
+        }
+    });
+
+    const select = (next: Range[]) => setSel({ranges: next, basis: stamp});
 
     const choose = (i: number, e: {ctrlKey: boolean; shiftKey: boolean; metaKey: boolean}) => {
-        const row = rows[i];
-        if (!row) return;
+        if (i < 0 || i >= total) return;
         setFocus(i);
-        if (e.shiftKey && anchor.current >= 0) {
-            const [a, b] = anchor.current < i ? [anchor.current, i] : [i, anchor.current];
-            const range = rows.slice(a, b + 1);
-            const keep = e.ctrlKey || e.metaKey ? selected.filter((r) => !range.some((x) => x.key === r.key)) : [];
-            onSelect([...keep, ...range]);
+        const ctrl = e.ctrlKey || e.metaKey;
+        if (e.shiftKey) {
+            const from = anchor.current >= 0 ? anchor.current : focus;
+            select(addRange(ctrl ? ranges : noRanges, from, i));
             return;
         }
         anchor.current = i;
-        if (e.ctrlKey || e.metaKey) {
-            onSelect(selectedKeys.has(row.key) ? selected.filter((r) => r.key !== row.key) : [...selected, row]);
-        } else {
-            onSelect([row]);
-        }
+        if (ctrl) select(inRanges(ranges, i) ? removeIndex(ranges, i) : addRange(ranges, i, i));
+        else select([[i, i]]);
     };
 
-    const open = (row: Row) => {
-        if (row.folder) onNavigate(row.key);
+    const open = (row: Row | undefined) => {
+        if (row?.folder) onNavigate(row.key);
     };
 
-    const focusRow = (i: number) => {
-        const el = tableRef.current?.querySelector<HTMLElement>(`[data-index="${i}"]`);
-        el?.focus();
-        el?.scrollIntoView({block: 'nearest'});
-    };
+    const pageSize = () => Math.max(1, Math.floor((scrollRef.current?.clientHeight ?? 0) / rowH) - 2);
 
-    const onRowKey = (i: number, e: KeyboardEvent) => {
+    const onTableKey = (e: KeyboardEvent) => {
+        if ((e.target as HTMLElement).closest('.thead')) return;
+        if (e.altKey) return;
         const move = (to: number) => {
             e.preventDefault();
-            const j = Math.max(0, Math.min(rows.length - 1, to));
+            if (total === 0) return;
+            const j = Math.max(0, Math.min(total - 1, to));
             choose(j, {ctrlKey: false, metaKey: false, shiftKey: e.shiftKey});
-            focusRow(j);
+            moveFocus(j);
         };
-        if (e.key === 'ArrowDown') move(i + 1);
-        else if (e.key === 'ArrowUp') move(i - 1);
+        const mod = e.ctrlKey || e.metaKey;
+        if (e.key === 'ArrowDown') move(focus + 1);
+        else if (e.key === 'ArrowUp') move(focus - 1);
+        else if (e.key === 'PageDown') move(focus + pageSize());
+        else if (e.key === 'PageUp') move(focus - pageSize());
         else if (e.key === 'Home') move(0);
-        else if (e.key === 'End') move(rows.length - 1);
-        else if (e.key === 'Enter') open(rows[i]);
-        else if (e.key === ' ' && (e.ctrlKey || e.metaKey)) {
+        else if (e.key === 'End') move(total - 1);
+        else if (e.key === 'Enter') open(getRow(focus));
+        else if (e.key === ' ' && mod) {
             e.preventDefault();
-            choose(i, {ctrlKey: true, metaKey: false, shiftKey: false});
-        } else if (e.key === 'a' && (e.ctrlKey || e.metaKey)) {
+            choose(focus, {ctrlKey: true, metaKey: false, shiftKey: false});
+        } else if (e.key === 'a' && mod) {
             e.preventDefault();
-            onSelect(rows);
-        } else if (e.key === 'Escape') onSelect([]);
+            if (total > 0) {
+                anchor.current = 0;
+                select([[0, total - 1]]);
+            }
+        } else if (e.key === 'Escape') select(noRanges);
     };
 
     const goUp = () => {
@@ -150,8 +393,10 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     };
 
     const sortBy = (field: SortField) => {
-        setOffset(0);
         setSort((s) => ({field, desc: s.field === field ? !s.desc : false}));
+        setFocus(0);
+        anchor.current = -1;
+        if (scrollRef.current) scrollRef.current.scrollTop = 0;
     };
 
     const header = (field: SortField, label: string, right = false) => {
@@ -172,14 +417,12 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         prefix: all.slice(0, i + 1).join('/') + '/',
     }));
 
-    const selCount = selected.length;
-    const selObjects = selected.filter((r) => !r.folder);
-    const selBytes = selObjects.reduce((n, r) => n + r.size, 0);
-    const total = snap?.count ?? 0;
+    const selCount = info.count;
     const dropStyle = (bucket ? {'--wails-drop-target': 'drop'} : {}) as CSSProperties;
+    const focusRendered = total > 0 && items.some((v) => v.index === focus);
 
     return (
-        <main className="browser" aria-label="Objects">
+        <main className="browser" aria-label="Objects" ref={mainRef}>
             <div className="pathbar">
                 <button type="button" className="btn ghost icon-only" aria-label="Back" title="Back" disabled={!canGoBack} onClick={onBack}>
                     <Icon name="back"/>
@@ -243,30 +486,48 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                         <span>Choose one on the left, or add one by name.</span>
                     </div>
                 ) : (
-                    <div className="table-scroll" ref={tableRef}>
-                        <div className="table" role="table" aria-label={`${bucket}/${prefix}`} aria-rowcount={total + 1}>
-                            <div className="cols thead" role="row">
+                    <div className="table-scroll" ref={scrollRef} tabIndex={focusRendered ? -1 : 0} onKeyDown={onTableKey}
+                         onWheel={() => { pendingFocus.current = false; }} onPointerDown={() => { pendingFocus.current = false; }}>
+                        <div className="table" role="table" aria-label={`${bucket}/${prefix}`} aria-rowcount={total + 1} aria-multiselectable="true">
+                            <div className="cols thead" role="row" aria-rowindex={1}>
                                 {header('name', 'Name')}
                                 {header('size', 'Size', true)}
                                 {header('modified', 'Modified')}
                                 {header('class', 'Storage class')}
                             </div>
-                            {rows.map((r, i) => (
-                                <div key={r.key} role="row" data-index={i} aria-rowindex={offset + i + 2}
-                                     aria-selected={selectedKeys.has(r.key)} tabIndex={i === focus ? 0 : -1}
-                                     className={`cols trow${selectedKeys.has(r.key) ? ' sel' : ''}`}
-                                     onClick={(e: MouseEvent) => choose(i, e)}
-                                     onDoubleClick={() => open(r)}
-                                     onKeyDown={(e) => onRowKey(i, e)}>
-                                    <div role="cell" className="name">
-                                        <Icon name={r.folder ? 'folder' : 'file'} className={r.folder ? 'folder-icon' : 'file-icon'}/>
-                                        <span className="ellipsis">{r.name}</span>
-                                    </div>
-                                    <div role="cell" className="num ellipsis">{r.folder ? '' : formatSize(r.size)}</div>
-                                    <div role="cell" className="soft ellipsis">{r.folder ? '' : formatDate(r.modified)}</div>
-                                    <div role="cell" className="soft ellipsis">{formatStorageClass(r.storageClass)}</div>
-                                </div>
-                            ))}
+                            <div className="vbody" role="rowgroup" style={{height: Math.max(0, virtual.getTotalSize() - HEAD_H)}}>
+                                {items.map((v) => {
+                                    const i = v.index;
+                                    const r = getRow(i);
+                                    const on = inRanges(ranges, i);
+                                    const style = {transform: `translateY(${v.start - HEAD_H}px)`};
+                                    if (!r) {
+                                        return (
+                                            <div key={i} role="row" data-index={i} aria-rowindex={i + 2} aria-selected={on} aria-busy="true"
+                                                 tabIndex={i === focus ? 0 : -1} style={style}
+                                                 className={`cols trow vrow${on ? ' sel' : ''}`}
+                                                 onClick={(e: MouseEvent) => choose(i, e)}>
+                                                <div role="cell" className="name"><span className="skel"/></div>
+                                                <div role="cell"/><div role="cell"/><div role="cell"/>
+                                            </div>
+                                        );
+                                    }
+                                    return (
+                                        <div key={i} role="row" data-index={i} aria-rowindex={i + 2} aria-selected={on}
+                                             tabIndex={i === focus ? 0 : -1} style={style}
+                                             className={`cols trow vrow${on ? ' sel' : ''}`}
+                                             onClick={(e: MouseEvent) => choose(i, e)} onDoubleClick={() => open(r)}>
+                                            <div role="cell" className="name">
+                                                <Icon name={r.folder ? 'folder' : 'file'} className={r.folder ? 'folder-icon' : 'file-icon'}/>
+                                                <span className="ellipsis">{r.name}</span>
+                                            </div>
+                                            <div role="cell" className="num ellipsis">{r.folder ? '' : formatSize(r.size)}</div>
+                                            <div role="cell" className="soft ellipsis">{r.folder ? '' : formatDate(r.modified)}</div>
+                                            <div role="cell" className="soft ellipsis">{formatStorageClass(r.storageClass)}</div>
+                                        </div>
+                                    );
+                                })}
+                            </div>
                         </div>
                         {snap?.state === 'done' && total === 0 && !snap.error && (
                             <div className="empty" style={{height: 200}}>
@@ -298,16 +559,7 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                 <div className="spacer"/>
                 {selCount > 0 && (
                     <span className="strong">
-                        {plural(selCount, 'selected item')}{selObjects.length ? ` · ${formatSize(selBytes)}` : ''}
-                    </span>
-                )}
-                {total > pageSize && (
-                    <span className="pager">
-                        <button type="button" className="btn ghost small icon-only" aria-label="Previous rows" disabled={offset === 0}
-                                onClick={() => setOffset(Math.max(0, offset - pageSize))}><Icon name="chevronLeft" size="sm"/></button>
-                        <span>{(offset + 1).toLocaleString('en-US')}–{Math.min(offset + pageSize, total).toLocaleString('en-US')} of {total.toLocaleString('en-US')}</span>
-                        <button type="button" className="btn ghost small icon-only" aria-label="Next rows" disabled={offset + pageSize >= total}
-                                onClick={() => setOffset(offset + pageSize)}><Icon name="chevronRight" size="sm"/></button>
+                        {plural(selCount, 'selected item')}{info.objects ? ` · ${formatSize(info.bytes)}` : ''}
                     </span>
                 )}
             </div>

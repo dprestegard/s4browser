@@ -8,7 +8,7 @@ import {Browser} from './shell/Browser';
 import {Details} from './shell/Details';
 import {TransferDock} from './shell/TransferDock';
 import {Splitter} from './ui/Splitter';
-import {Drop, Location, Row, Snapshot} from './types';
+import {Drop, Location, noSelection, SelectionInfo, Snapshot} from './types';
 
 // The app shell approved in stage 1.3: top bar, bucket sidebar, listing,
 // details panel and the transfer dock.
@@ -27,21 +27,19 @@ export default function App() {
     const [location, setLocation] = useState<Location | null>(null);
     const [history, setHistory] = useState<Location[]>([]);
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
-    const [selected, setSelected] = useState<Row[]>([]);
+    const [selection, setSelection] = useState<SelectionInfo>(noSelection);
     const [drops, setDrops] = useState<Drop[]>([]);
 
     // A new profile starts with nothing open.
     useEffect(() => {
         setLocation(null);
         setHistory([]);
-        setSelected([]);
     }, [profileId]);
 
     const go = useCallback((next: Location) => {
         if (location && location.bucket === next.bucket && location.prefix === next.prefix) return;
         if (location) setHistory((h) => [...h.slice(-99), location]);
         setLocation(next);
-        setSelected([]);
     }, [location]);
 
     const back = () => {
@@ -49,7 +47,6 @@ export default function App() {
         if (!prev) return;
         setHistory(history.slice(0, -1));
         setLocation(prev);
-        setSelected([]);
     };
 
     // Dropped files arrive in Go as absolute paths; Go logs them and sends the
@@ -76,8 +73,8 @@ export default function App() {
                 <Browser profileId={profileId} location={location}
                          onNavigate={(prefix) => location && go({...location, prefix})}
                          canGoBack={history.length > 0} onBack={back}
-                         onSnapshot={setSnapshot} selected={selected} onSelect={setSelected}/>
-                {detailsOpen && <Details location={location} snapshot={snapshot} selected={selected}/>}
+                         onSnapshot={setSnapshot} onSelection={setSelection} density={density}/>
+                {detailsOpen && <Details location={location} snapshot={snapshot} selection={selection}/>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', minHeight: 0}}>
                 {dockOpen && (

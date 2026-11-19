@@ -42,6 +42,10 @@ export type Snapshot = {
 
 export type Row = {key: string; name: string; folder: boolean; size: number; modified?: string; storageClass?: string};
 export type ListingWindow = {listing: Snapshot; offset: number; rows: Row[]};
+// What the UI knows about the selection. The selection itself is index ranges
+// in Browser; Go totals them, so unrendered rows never travel to the page.
+export type SelectionInfo = {count: number; folders: number; objects: number; bytes: number; single: Row | null};
+export const noSelection: SelectionInfo = {count: 0, folders: 0, objects: 0, bytes: 0, single: null};
 export type SortField = 'name' | 'size' | 'modified' | 'class';
 export type Sort = {field: SortField; desc: boolean};
 

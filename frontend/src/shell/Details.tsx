@@ -1,17 +1,17 @@
 import {formatBytes, formatDate, formatSize, formatStorageClass, plural} from '../ui/format';
-import {Location, Row, Snapshot} from '../types';
+import {Location, Row, SelectionInfo, Snapshot} from '../types';
 
 // The right-hand panel. It shows what the listing already knows. Encryption,
 // checksums, tags and presigned links need extra requests and arrive in stage 3.1.
-export function Details({location, snapshot, selected}: {
+export function Details({location, snapshot, selection}: {
     location: Location | null;
     snapshot: Snapshot | null;
-    selected: Row[];
+    selection: SelectionInfo;
 }) {
     return (
         <aside className="details selectable" aria-label="Details">
-            {selected.length === 1 ? <One row={selected[0]} location={location}/>
-                : selected.length > 1 ? <Many rows={selected}/>
+            {selection.count === 1 && selection.single ? <One row={selection.single} location={location}/>
+                : selection.count > 0 ? <Many info={selection}/>
                     : <Folder location={location} snapshot={snapshot}/>}
         </aside>
     );
@@ -35,20 +35,18 @@ function One({row, location}: {row: Row; location: Location | null}) {
     );
 }
 
-function Many({rows}: {rows: Row[]}) {
-    const objects = rows.filter((r) => !r.folder);
-    const folders = rows.length - objects.length;
-    const bytes = objects.reduce((n, r) => n + r.size, 0);
+function Many({info}: {info: SelectionInfo}) {
+    const {objects, folders, bytes} = info;
     return (
         <>
             <div className="stack">
                 <span className="label">Selection</span>
-                <span className="title">{plural(rows.length, 'item')} selected</span>
+                <span className="title">{plural(info.count, 'item')} selected</span>
             </div>
             <dl className="kv">
-                <dt>Objects</dt><dd>{objects.length.toLocaleString('en-US')}</dd>
+                <dt>Objects</dt><dd>{objects.toLocaleString('en-US')}</dd>
                 {folders > 0 && <><dt>Folders</dt><dd>{folders.toLocaleString('en-US')}</dd></>}
-                {objects.length > 0 && <><dt>Total size</dt><dd>{formatSize(bytes)}<br/><span className="meta">{formatBytes(bytes)}{folders > 0 ? ', not counting folders' : ''}</span></dd></>}
+                {objects > 0 && <><dt>Total size</dt><dd>{formatSize(bytes)}<br/><span className="meta">{formatBytes(bytes)}{folders > 0 ? ', not counting folders' : ''}</span></dd></>}
             </dl>
         </>
     );

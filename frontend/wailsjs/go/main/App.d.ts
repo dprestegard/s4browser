@@ -17,6 +17,8 @@ export function DeleteProfile(arg1:string):Promise<void>;
 
 export function Info():Promise<main.StartInfo>;
 
+export function ListingSummary(arg1:string,arg2:string,arg3:boolean,arg4:Array<any>):Promise<browse.Summary>;
+
 export function ListingWindow(arg1:string,arg2:string,arg3:boolean,arg4:number,arg5:number):Promise<browse.Window>;
 
 export function OpenListing(arg1:string,arg2:string,arg3:string):Promise<browse.Snapshot>;

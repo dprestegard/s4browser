@@ -199,6 +199,24 @@ export namespace browse {
 	        this.desc = source["desc"];
 	    }
 	}
+	export class Summary {
+	    count: number;
+	    folders: number;
+	    objects: number;
+	    bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Summary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.count = source["count"];
+	        this.folders = source["folders"];
+	        this.objects = source["objects"];
+	        this.bytes = source["bytes"];
+	    }
+	}
 	export class Window {
 	    listing: Snapshot;
 	    sort: SortSpec;

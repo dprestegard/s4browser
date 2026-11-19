@@ -707,3 +707,35 @@ func TestRowLimitCountsFolders(t *testing.T) {
 		t.Fatalf("snapshot = %+v, want 50 folders, truncated", snap)
 	}
 }
+
+func TestSummarizeRanges(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	snap := e.wait(e.open("west-bucket", "").ID)
+	spec := SortSpec{Field: SortName}
+	rows := e.all(snap.ID, spec)
+	if len(rows) < 3 {
+		t.Skip("fixture too small")
+	}
+	var want Summary
+	for _, r := range rows[1:3] {
+		want.Count++
+		if r.Folder {
+			want.Folders++
+		} else {
+			want.Objects++
+			want.Bytes += r.Size
+		}
+	}
+	got, err := e.svc.Summarize(snap.ID, spec, [][2]int{{1, 2}})
+	if err != nil || got != want {
+		t.Fatalf("got %+v, %v want %+v", got, err, want)
+	}
+	all, _ := e.svc.Summarize(snap.ID, spec, [][2]int{{-5, 1 << 40}})
+	if all.Count != len(rows) {
+		t.Fatalf("clamped range counted %d of %d", all.Count, len(rows))
+	}
+	none, _ := e.svc.Summarize(snap.ID, spec, [][2]int{{5, 2}})
+	if none.Count != 0 {
+		t.Fatalf("inverted range counted %d", none.Count)
+	}
+}

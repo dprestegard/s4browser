@@ -446,3 +446,39 @@ func (l *Listing) rowLocked(r *row) Row {
 	out.Name = name
 	return out
 }
+
+// Summary totals a selection made of index ranges in one sort order.
+type Summary struct {
+	Count   int   `json:"count"`
+	Folders int   `json:"folders"`
+	Objects int   `json:"objects"`
+	Bytes   int64 `json:"bytes"`
+}
+
+// Summarize totals the rows in the inclusive index ranges [from, to] of the
+// given sort order. Ranges are clamped to the listing, so a selection made
+// while the listing was smaller stays valid.
+func (s *Service) Summarize(id string, spec SortSpec, ranges [][2]int) (Summary, error) {
+	l, err := s.listing(id)
+	if err != nil {
+		return Summary{}, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	perm := l.viewLocked(spec)
+	var out Summary
+	for _, r := range ranges {
+		from, to := max(r[0], 0), min(r[1], len(perm)-1)
+		for _, i := range perm[min(from, to+1) : max(to+1, from)] {
+			row := &l.rows[i]
+			out.Count++
+			if row.folder {
+				out.Folders++
+			} else {
+				out.Objects++
+				out.Bytes += row.size
+			}
+		}
+	}
+	return out, nil
+}
