@@ -58,6 +58,8 @@ type uploadedPart struct {
 }
 
 type bucket struct {
+	region  string
+	created time.Time
 	objects map[string]*object
 	uploads map[string]*upload
 	sorted  []string
@@ -91,7 +93,7 @@ type core struct {
 	counts     map[attemptKey]int
 }
 
-func newCore(clock engine.Clock, guard engine.WriteGuard, buckets []string) *core {
+func newCore(clock engine.Clock, guard engine.WriteGuard, buckets []string, regions map[string]string) *core {
 	c := &core{
 		clock: clock, guard: guard,
 		buckets: make(map[string]*bucket),
@@ -99,13 +101,16 @@ func newCore(clock engine.Clock, guard engine.WriteGuard, buckets []string) *cor
 		counts:  make(map[attemptKey]int),
 	}
 	for _, name := range buckets {
-		c.buckets[name] = newBucket()
+		c.buckets[name] = newBucket(Region, clock.Now())
+	}
+	for name, region := range regions {
+		c.buckets[name] = newBucket(region, clock.Now())
 	}
 	return c
 }
 
-func newBucket() *bucket {
-	return &bucket{objects: make(map[string]*object), uploads: make(map[string]*upload)}
+func newBucket(region string, created time.Time) *bucket {
+	return &bucket{region: region, created: created, objects: make(map[string]*object), uploads: make(map[string]*upload)}
 }
 
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 64*1024); return &b }}

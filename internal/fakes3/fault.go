@@ -29,6 +29,9 @@ const (
 	OpGet          Op = "GetObject"
 	OpDelete       Op = "DeleteObject"
 	OpListObjects  Op = "ListObjectsV2"
+	OpListBuckets  Op = "ListBuckets"
+	OpHeadBucket   Op = "HeadBucket"
+	OpLocation     Op = "GetBucketLocation"
 )
 
 // mutating reports whether the write guard must approve op.
@@ -86,6 +89,11 @@ type Fault struct {
 	Delay time.Duration
 	// BytesPerSec throttles body transfer for FaultSlow.
 	BytesPerSec int64
+}
+
+// AccessDenied is a 403 AccessDenied, as for an IAM policy that refuses the call.
+func AccessDenied() Fault {
+	return Fault{Kind: FaultError, Status: http.StatusForbidden, Code: "AccessDenied", Message: "Access Denied"}
 }
 
 // InternalError is a 500 InternalError.

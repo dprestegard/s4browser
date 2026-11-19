@@ -34,13 +34,16 @@ const kindLabels: Record<string, string> = {
 
 const emptyForm = {name: '', accessKey: '', secret: '', region: ''};
 
-export function Profiles() {
+export function Profiles({onActive}: {onActive?: (id: string) => void}) {
     const [state, setState] = useState<State>({profiles: [], activeId: ''});
     const [form, setForm] = useState(emptyForm);
     const [message, setMessage] = useState('');
     const [busy, setBusy] = useState('');
 
-    const reload = useCallback(() => LoadProfiles().then((s) => setState(s as State)), []);
+    const reload = useCallback(() => LoadProfiles().then((s) => {
+        setState(s as State);
+        onActive?.((s as State).activeId);
+    }), [onActive]);
     useEffect(() => {
         reload();
     }, [reload]);

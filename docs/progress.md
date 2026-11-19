@@ -699,3 +699,90 @@ The user ran the manual drop test from stage 0.6 and reported that it passed. It
 ### Next
 
 Stage 1.2 (bucket list, add by name, region detection, progressive listing) starts from this commit. It is not started here.
+
+## Stage 1.2: bucket list, add by name, region detection, progressive listing
+
+**Status:** done. `wails build`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...` and `staticcheck ./...` pass, and vet and staticcheck also pass with `-tags devfake`. `GOOS=darwin go vet` passes for browse, s3x, fakes3, engine, creds, journal, fsx and `cmd/...`. No AWS calls were made and `~/.aws` was not read.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Bucket list, add by name, region cache, error messages | `internal/browse/buckets.go` |
+| Saved buckets (`%AppData%\s4browser\buckets.json`, per profile ID) | `internal/browse/saved.go` |
+| Background listing, snapshots, windows | `internal/browse/listing.go` |
+| Sort orders, natural name compare | `internal/browse/sort.go` |
+| Browse client and region detection | `internal/s3x/browse.go` |
+| Fake S3: ListBuckets, HeadBucket, GetBucketLocation, per-bucket regions, 301 for a request signed for the wrong region | `internal/fakes3/buckets.go`, small changes in `server.go`, `core.go`, `api.go`, `fault.go` |
+| Wails bindings | `browse.go`, `app.go` |
+| Dev-only fake S3 for the UI (`-tags devfake`) | `devfake.go`, `devfake_off.go` |
+| Working panel, replaced in stages 1.3 and 1.4 | `frontend/src/Browse.tsx` |
+
+**Bindings:** `Buckets(profileID)`, `AddBucket(profileID, name, region)`, `RemoveBucket`, `OpenListing(profileID, bucket, prefix)`, `ListingWindow(id, field, desc, offset, limit)` and `CloseListing(id)`. Listing progress arrives as the `s4:listing` event: about 5 per second per listing, plus one when it stops.
+
+### How it works
+
+- **Buckets.** `ListBuckets` is called with `MaxBuckets=1000`, because S3 reports `BucketRegion` only when the request has a parameter. This saves one HeadBucket per bucket. All pages are read. Buckets added by name are merged in. If `ListBuckets` is denied, the result says so (`listDenied`) and still returns the added buckets.
+- **Region detection** (`s3x.DetectRegion`):
+  1. `HeadBucket` is signed for us-east-1 and the region is read from `x-amz-bucket-region`. S3 sends this header on 200, 301 and 403.
+  2. With no header, `GetBucketLocation` is tried. Empty means us-east-1 and `EU` means eu-west-1.
+  3. A 404 is `ErrNoSuchBucket`. Anything else is `ErrRegionUnknown`, and only then is a region the user typed used.
+
+  If a typed region disagrees with the detected one, the detected one is used and the result carries a note.
+- **Region cache.** Regions are cached per bucket name, in memory, seeded from `buckets.json` and `ListBuckets`. If a listing gets a 301 naming another region (a bucket recreated elsewhere), it switches region once and carries on.
+- **Listing.** Each listing runs in its own goroutine and calls `ListObjectsV2` with delimiter `/`, `encoding-type=url` and 1000 keys per page. URL encoding is needed because keys with control characters would otherwise break the XML. The folder's own placeholder object is skipped. Rows are kept compactly in Go. A listing stops at 1,000,000 rows (`truncated`), and at most 16 listings stay open: opening another closes the oldest. Browse calls keep the SDK's standard retries, because they are not engine part requests.
+- **Sorting.** Name, size, modified and storage class, each ascending or descending.
+  - Folders always come first. When sorting by size, date or class, folders are ordered by name.
+  - Ties are broken by name.
+  - Names compare as in Explorer: ASCII case is ignored, digit runs compare by value (`shot2` before `shot10`), and bytes decide the rest, so the order is total.
+  - Each order is a cached permutation. As pages arrive, only the new rows are sorted and then merged in, so windows stay cheap while a listing loads.
+
+### Evidence
+
+| Requirement | Test or check |
+|---|---|
+| **100,000 objects list, sort and page in Go** | `TestHundredThousandObjects`. 100,000 objects plus 100 folders under one prefix are listed through the real SDK over HTTPS. All 8 orders are then walked end to end in windows of 1,000 and checked against an independent comparator. On this machine: listed in 0.42 s (101 pages), slowest full sort 58 ms, later windows under 1 ms, 11.9 MiB of heap for the listing with all 8 orders. Without the race detector the test asserts a sort under 500 ms, a window under 20 ms and heap under 48 MiB |
+| Regions come from ListBuckets and listing uses the right region | `TestBucketsComeWithTheirRegions` (no HeadBucket calls, no 301s), `TestListBucketsPages` (2,345 buckets in 3 pages) |
+| Every region detection path | `TestRegionDetection`: 200, 301 and 403 with the header (no GetBucketLocation call), no header so GetBucketLocation, empty location, location denied, missing bucket |
+| Adding by name: works when listing is denied, kept per profile, survives a restart, and a saved region needs no lookup | `TestAddBucketByNameWhenListingIsDenied`, `TestAddBucketUsesEnteredRegionOnlyWhenDetectionFails`, `TestDamagedSavedFileIsKept`, `TestNormalizeBucketName` |
+| Folders, placeholders, URL-encoded and unusual keys | `TestListingFoldersObjectsAndEncodedKeys` (space, `+`, `%`, non-ASCII, `\x01`, empty segment) |
+| Stale region | `TestListingFollowsARegionChange` |
+| Errors: denied, expired session, credentials fail (no request sent), missing bucket, 503 retried | `TestListingErrors` |
+| Progressive loading, windows while loading, close cancels the request | `TestProgressiveLoadingAndCancel`, `TestConcurrentWindowsDuringLoading` (5 orders read at once during loading) |
+| Limits | `TestListingLimitsAndEviction`, `TestRowLimitCountsFolders`, `TestWindowBounds` |
+| The incremental sort equals a full sort | `TestIncrementalSortMatchesFullSort` (random rows, many ties, 40 chunks, 8 orders) |
+
+Every browse test ends with a goroutine leak check.
+
+**Tests of the tests.** I injected 18 deliberate bugs and the tests caught each one. They include: no URL encoding, no merge, no redirect follow, placeholder kept, region header ignored, folders last, descending ignored, numeric compare broken, ListBuckets without a parameter, row and folder limits ignored, close not cancelling (the test hangs), bucket not saved, and a typed region winning over the detected one.
+
+**Hands-on run.** I ran `wails dev -tags devfake` with empty temporary AWS files and drove it through the dev server page. The fake held 100,040 entries under `dev-media/big/`.
+
+- The page showed 4 buckets with their regions.
+- The folder loaded in 1.21 s over 101 pages.
+- Sorting by size, descending, kept the 40 folders first in natural order (reel1, reel2 … reel10).
+- The first sorted page arrived in 57 ms.
+
+Adding a bucket by name was not tried by hand. The tests cover it.
+
+### Dev mode
+
+```powershell
+wails dev -tags devfake
+```
+
+In this mode browsing uses an in-process fake S3 with fake keys, whatever profile is selected, and added buckets are saved to a temporary folder. Set `S4_DEVFAKE_DENY_LIST=1` to make `ListBuckets` fail, so buckets must be added by name. `dev-hidden` is in ap-southeast-2. Release builds do not contain the fake: without the tag, `go list -deps .` lists no `fakes3`.
+
+### Open risks
+
+- **Browsing is unverified against real S3.** `BucketRegion` in `ListBuckets`, the region header on HeadBucket 301 and 403, and the 301 on a wrong-region `ListObjectsV2` follow the AWS documentation and the fake. Stage 4.3 should list the test bucket and add it by name with a real profile.
+- **Opt-in regions and other partitions are untried.** Detection signs for us-east-1. It may fail for a bucket in an opt-in region the account has not enabled, or in GovCloud or China. The user can then type the region.
+- **Case folding in the name sort is ASCII-only.** Non-ASCII letters compare by bytes, so `Ä` and `ä` are not treated as equal.
+- **Keys with an empty segment show a folder named `/`.** Stage 2.3 decides how such keys are downloaded.
+- **A listing is a snapshot.** Changes made after it loaded appear only when it is reopened. Stage 3.1 should reopen it after a delete or a create folder.
+- **The working panel pages 100 rows at a time.** Virtual scrolling is stage 1.4, which should request only the visible rows from `ListingWindow` and refetch on `s4:listing` events.
+- **Switching profiles leaves the old listing open.** The panel follows the active profile and reloads the bucket list on a switch. The previous profile's listing closes only when another listing opens.
+
+### Next
+
+Stage 1.3 (app shell and visual design system, Opus) starts from this commit and needs your approval of the design. It is not started here.

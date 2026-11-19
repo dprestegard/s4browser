@@ -59,13 +59,36 @@ func (s *Server) RefusedWrites() int {
 	return s.core.refused
 }
 
-// AddBucket makes a bucket exist.
-func (s *Server) AddBucket(name string) {
+// AddBucket makes a bucket exist in Region.
+func (s *Server) AddBucket(name string) { s.AddBucketInRegion(name, Region) }
+
+// AddBucketInRegion makes a bucket exist in the given region. An existing
+// bucket keeps its objects and moves to region.
+func (s *Server) AddBucketInRegion(name, region string) {
 	s.core.mu.Lock()
 	defer s.core.mu.Unlock()
-	if s.core.buckets[name] == nil {
-		s.core.buckets[name] = newBucket()
+	if b := s.core.buckets[name]; b != nil {
+		b.region = region
+		return
 	}
+	s.core.buckets[name] = newBucket(region, s.core.clock.Now())
+}
+
+// PutListed creates a metadata-only object for listing tests: it has the given
+// size and modification time, and reading its data is an error.
+func (s *Server) PutListed(bucket, key string, size int64, modified time.Time) error {
+	s.core.mu.Lock()
+	defer s.core.mu.Unlock()
+	b, e := s.core.bucketLocked(bucket)
+	if e != nil {
+		return e
+	}
+	if e := validKey(key); e != nil {
+		return e
+	}
+	sum := md5.Sum(fmt.Appendf(nil, "listed|%s|%d", key, size))
+	b.putLocked(key, &object{size: size, etag: hex.EncodeToString(sum[:]), modified: modified})
+	return nil
 }
 
 // PutSynthetic creates an object whose content is Pattern{seed} of the given

@@ -3,6 +3,7 @@ import './App.css';
 import {Info} from '../wailsjs/go/main/App';
 import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
 import {Profiles} from './Profiles';
+import {Browse} from './Browse';
 
 // Stage 0.6 spike. Throwaway: it proves that dropping files and folders gives
 // absolute paths in Go. It shows path strings and kinds only. File data never
@@ -15,6 +16,7 @@ function App() {
     const [drops, setDrops] = useState<Drop[]>([]);
     const [logPath, setLogPath] = useState('');
     const [logError, setLogError] = useState('');
+    const [profile, setProfile] = useState('');
 
     useEffect(() => {
         Info().then((info) => {
@@ -29,7 +31,8 @@ function App() {
 
     return (
         <div id="App">
-            <Profiles/>
+            <Profiles onActive={setProfile}/>
+            <Browse profile={profile}/>
             <h1>File-drop spike</h1>
             <p>Drop files, folders or both anywhere in this window.</p>
             <p className="meta">

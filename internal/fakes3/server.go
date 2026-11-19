@@ -42,6 +42,12 @@ type Options struct {
 	// Guard, when set, makes the server refuse every mutating request whose key
 	// it rejects, with 403 AccessDenied and no effect.
 	Guard engine.WriteGuard
+	// BucketRegions creates further buckets, each in the given region. Requests
+	// for a bucket that are signed for another region get S3's 301 redirect.
+	BucketRegions map[string]string
+	// HideBucketRegion leaves out the x-amz-bucket-region header and
+	// ListBuckets' BucketRegion, so clients must fall back to GetBucketLocation.
+	HideBucketRegion bool
 	// Clock supplies timestamps and fault delays. Defaults to real time.
 	Clock engine.Clock
 }
@@ -62,6 +68,8 @@ type Server struct {
 
 	reqMu sync.Mutex
 	reqID int
+
+	hideRegion bool
 }
 
 type realClock struct{}
@@ -80,7 +88,7 @@ func (t realTicker) C() <-chan time.Time { return t.Ticker.C }
 
 // New starts a server. Call Close when done.
 func New(opts Options) (*Server, error) {
-	if len(opts.Buckets) == 0 {
+	if len(opts.Buckets) == 0 && len(opts.BucketRegions) == 0 {
 		opts.Buckets = []string{DefaultBucket}
 	}
 	if opts.Clock == nil {
@@ -102,10 +110,11 @@ func New(opts Options) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{
-		core:     newCore(opts.Clock, opts.Guard, opts.Buckets),
-		listener: listener,
-		certPEM:  certPEM,
-		url:      "https://" + listener.Addr().String(),
+		core:       newCore(opts.Clock, opts.Guard, opts.Buckets, opts.BucketRegions),
+		listener:   listener,
+		certPEM:    certPEM,
+		url:        "https://" + listener.Addr().String(),
+		hideRegion: opts.HideBucketRegion,
 	}
 	s.ctx, s.cancel = context.WithCancelCause(context.Background())
 	transport := &http.Transport{
@@ -226,6 +235,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	switch {
+	case bucketName == "":
+		err = s.serveService(ctx, w, r, info, q)
 	case key == "":
 		err = s.serveBucket(ctx, w, r, info, q, hasUploads)
 	case r.Method == http.MethodPut && uploadID != "" && q.Get("partNumber") != "":
@@ -549,16 +560,16 @@ func atoi(s string) int {
 }
 
 func (s *Server) serveBucket(ctx context.Context, w http.ResponseWriter, r *http.Request, info reqInfo, q map[string][]string, hasUploads bool) error {
+	_, location := q["location"]
+	if r.Method == http.MethodGet && location {
+		return s.serveLocation(ctx, w, info)
+	}
+	if err := s.checkRegion(w, r, info); err != nil {
+		return err
+	}
 	switch {
 	case r.Method == http.MethodHead:
-		s.core.mu.Lock()
-		_, e := s.core.bucketLocked(info.bucket)
-		s.core.mu.Unlock()
-		if e != nil {
-			return e
-		}
-		w.Header().Set("x-amz-bucket-region", Region)
-		w.WriteHeader(http.StatusOK)
+		return s.serveHeadBucket(ctx, w, info)
 	case r.Method == http.MethodGet && hasUploads:
 		in := listUploadsIn{info: info, prefix: first(q["prefix"]), keyMarker: first(q["key-marker"]), idMarker: first(q["upload-id-marker"]), maxUploads: atoi(first(q["max-uploads"]))}
 		out, err := s.core.listUploads(ctx, in)

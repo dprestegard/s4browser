@@ -8,6 +8,7 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"s4browser/internal/browse"
 	"s4browser/internal/creds"
 )
 
@@ -24,6 +25,9 @@ type App struct {
 	// then says why.
 	profiles    *creds.Manager
 	profilesErr string
+	// browse is nil if browsing could not start, and browseErr then says why.
+	browse    *browse.Service
+	browseErr string
 }
 
 // NewApp creates the App.
@@ -52,10 +56,16 @@ func (a *App) startup(ctx context.Context) {
 	if a.profiles, err = openProfiles(); err != nil {
 		a.profilesErr = err.Error()
 	}
+	if a.browse, err = a.openBrowse(); err != nil {
+		a.browseErr = err.Error()
+	}
 	runtime.OnFileDrop(ctx, a.onDrop)
 }
 
 func (a *App) shutdown(context.Context) {
+	if a.browse != nil {
+		a.browse.Close()
+	}
 	if a.log != nil {
 		_ = a.log.Close()
 	}
