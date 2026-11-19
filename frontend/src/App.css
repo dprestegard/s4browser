@@ -45,3 +45,42 @@ li {
 .kind-error {
     color: #ff7b72;
 }
+
+.profiles {
+    margin-bottom: 2rem;
+}
+
+.profile {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    word-break: normal;
+}
+
+.profile label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.problem {
+    flex-basis: 100%;
+    color: #ff7b72;
+    font-size: 0.9rem;
+}
+
+.status {
+    word-break: break-word;
+}
+
+.profiles form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.profiles form h3 {
+    flex-basis: 100%;
+    margin: 0.75rem 0 0;
+}

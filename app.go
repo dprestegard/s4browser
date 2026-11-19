@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+
+	"s4browser/internal/creds"
 )
 
 // App is the stage 0.6 file-drop spike. It has no engine and no S3 access: it
@@ -18,6 +20,10 @@ type App struct {
 	log *dropLog
 	// logErr is the reason the log file could not be opened, shown on screen.
 	logErr string
+	// profiles is nil if the profile store could not be opened, and profilesErr
+	// then says why.
+	profiles    *creds.Manager
+	profilesErr string
 }
 
 // NewApp creates the App.
@@ -42,6 +48,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if err != nil {
 		a.logErr = err.Error()
+	}
+	if a.profiles, err = openProfiles(); err != nil {
+		a.profilesErr = err.Error()
 	}
 	runtime.OnFileDrop(ctx, a.onDrop)
 }

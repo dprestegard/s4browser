@@ -629,3 +629,73 @@ The user ran the manual drop test from stage 0.6 and reported that it passed. It
 ### Next
 
 **Decision: GO**, given by the user on 2026-11-18. Stage 1.1 (profiles, vault storage and `credential_process`) may start from this commit in a new session. It is not started here.
+
+## Stage 1.1: profiles, vault storage and `credential_process`
+
+**Status:** done. `wails build`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...` and `staticcheck ./...` pass. `GOOS=darwin go vet` passes for creds, engine, journal, fsx, s3x, fakes3 and `cmd/...`. No AWS calls were made and `~/.aws` was not read: every test and the hands-on run used temporary AWS files with fake values.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Profile types, IDs, validation | `internal/creds/profile.go` |
+| OS vault (`zalando/go-keyring` v0.2.8) | `internal/creds/vault.go` |
+| Reading the shared AWS files | `internal/creds/awsfiles.go` |
+| Hidden `credential_process` runner | `internal/creds/process.go`, `process_windows.go`, `process_other.go` |
+| Profile list, active selection, credential caches | `internal/creds/manager.go` |
+| Wails bindings | `profiles.go`, `app.go` |
+| Working panel, replaced in stage 1.3 | `frontend/src/Profiles.tsx` |
+
+### Credential types
+
+| Kind | Source | Refresh |
+|---|---|---|
+| `vault-keys` | Static keys in Windows Credential Manager, entry `s4browser:profile/<name>` | Read from the vault again after a key change |
+| `static` | Keys in the shared AWS files | Re-read by `Manager.Refresh` |
+| `session` | Temporary keys and a token in the shared AWS files, written by an external sign-in tool (found in stage 0.7) | Re-read by `Manager.Refresh` after a new sign-in |
+| `credential-process` | Helper command in the AWS config | Run again before expiry, one minute ahead |
+| `other` | Role, SSO, web identity | Listed as unsupported. Left to the SDK |
+
+- **Profile IDs are `app:<name>` or `aws:<name>`.** Use the ID as `engine.ObjectRef.Profile`.
+- **On disk:** `%AppData%\s4browser\profiles.json` holds names, regions, the last four characters of the access key ID and the active ID. It holds no key material.
+- **Switching profiles does not affect running transfers.** Each profile has one provider for the life of the `Manager`, and it survives key changes.
+- **The AWS files are never written.**
+
+### Why the SDK's `credential_process` provider is not used
+
+| Problem with the SDK provider | What the app does |
+|---|---|
+| A visible console window opens from a GUI app | `CREATE_NO_WINDOW` |
+| Quoted commands reach `cmd.exe` escaped as `\"` and fail | The command line is built by hand with `/D /S /C` |
+| The config parser removes outer quotes, which breaks `"C:\a b\x.exe"` and `"C:\a b\x.exe" --name "c d"` | `awsFiles.processCommand` restores them from the raw file |
+| Cancelling kills `cmd.exe` but not the helper it started | The helper runs in a job object, which is terminated on cancel |
+| Parse errors quote the helper's output, which can hold secrets | Errors never include stdout |
+
+### Evidence
+
+| Requirement | Test or check |
+|---|---|
+| Helper runs hidden from a real GUI program | `TestHelperHasNoVisibleWindowFromGUIApp`: no console window. The control, `TestSDKProviderControl` (`S4_GUI_CONTROL=1`), reports a visible window with the SDK provider, so the check can tell the two apart |
+| Quoted paths, arguments, `.cmd` helpers | `TestCredentialProcessQuotedPath`, `TestCredentialProcessKeepsQuotesTheParserRemoves`, `TestCredentialProcessBatchFile` |
+| Cancel ends the helper | `TestCancelEndsTheHelperProcess`. It fails when the job is not terminated |
+| Helper failures are credential errors with no secret in the text | `TestCredentialProcessFailures` |
+| Real Credential Manager | `TestSystemVaultRoundTrip` (`S4_VAULT_TEST=1`), run once with a throwaway entry and fake values |
+| Profile lifecycle, switching, failed vault writes, damaged state file | `TestAppProfileLifecycle`, `TestSwitchingKeepsEachProfilesCredentials`, `TestVaultFailuresLeaveNoHalfProfile`, `TestDamagedStateFileIsKept` |
+| New sign-in is picked up without a restart | `TestStaticAndSessionKeysFromFile` |
+
+**Hands-on run.** `wails dev` with fake AWS files, driven through the dev server page, which calls the same Go bindings. The list showed each kind, a `.cmd` helper in a path with a space loaded credentials, and the selection was saved. Adding fake keys created one Credential Manager entry, wrote no key material to the app folder, and deleting the profile removed the entry.
+
+### Open risks
+
+- **No real `credential_process` helper or real sign-in tool has been tried.** The helpers are test programs and a `.cmd` file. Expiry during a real transfer is checked in stages 2.1 and 4.3.
+- **The engine does not use `creds.Manager` yet.** Stage 2.1 must build the production `CredentialProber` on `Manager.Refresh`, and whatever changes keys must call `NotifyCredentialsChanged`. Stage 1.2 should build its S3 clients from `Manager.Provider`. `s4engine` keeps its own loader.
+- **`Refresh` proves only that credentials load.** It does not contact AWS, so an expired session whose file is unchanged still loads. Stage 2.1 must not treat that as recovery.
+- **A refresh the caller abandons keeps running.** The SDK's cache detaches it from the caller's context, so the helper can run for up to one minute. Concurrent refreshes share that run.
+- **Helpers that prompt on the console fail,** because the helper has no stdin. A helper that opens its own sign-in window should still work, but this was not tried.
+- **Unsupported role profiles can still flash a console** if their `source_profile` uses `credential_process`, because that path stays inside the SDK.
+- **A credentials file saved with a UTF-8 byte order mark loses its first profile.** The SDK does not recognise that section, so the app lists it as having no credentials.
+- **macOS has no process containment.** Cancelling there ends only the shell. Mac work is deferred.
+
+### Next
+
+Stage 1.2 (bucket list, add by name, region detection, progressive listing) starts from this commit. It is not started here.
