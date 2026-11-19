@@ -148,6 +148,10 @@ h1, h2, h3 { margin: 0; font-size: inherit; }
     box-shadow: var(--shadow);
     display: flex; flex-direction: column;
 }
+/* No menu is taller than the window; a long list inside one scrolls on its
+   own so the heading and the actions below it stay visible. */
+.menu { max-height: calc(100vh - var(--topbar-h) - 8px); overflow-y: auto; }
+.menu-scroll { flex: 0 1 auto; min-height: 0; max-height: calc(100vh - 240px); overflow-y: auto; }
 .menu-item {
     display: flex; align-items: center; gap: 8px; width: 100%;
     min-height: 30px; padding: 4px 8px; border: 0; border-radius: var(--r-control);

@@ -95,6 +95,7 @@ function ProfileMenu({profiles}: {profiles: Profiles}) {
                     {state.warnings?.map((w) => <p key={w} className="meta t-warn" style={{margin: '6px 8px'}}>{w}</p>)}
                     <div className="label menu-heading">Profiles</div>
                     {state.profiles.length === 0 && <p className="meta" style={{padding: '4px 8px'}}>No AWS profiles or saved keys were found.</p>}
+                    <div className="menu-scroll">
                     {state.profiles.map((p) => (
                         <button key={p.id} type="button" role="menuitemradio" aria-checked={p.id === state.activeId}
                                 className="menu-item" disabled={!p.supported}
@@ -115,6 +116,7 @@ function ProfileMenu({profiles}: {profiles: Profiles}) {
                             </span>
                         </button>
                     ))}
+                    </div>
                     {status.state === 'failed' && (
                         <p className="meta t-warn" role="status" style={{padding: '6px 8px'}}>{status.message}</p>
                     )}
