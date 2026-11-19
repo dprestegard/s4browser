@@ -371,3 +371,167 @@ Against `internal/fakes3`. All pass under `-race`, and each ends by asserting th
 ### Next
 
 Stage 0.6 (`s4engine` CLI and file-drop window) starts from this commit. It is not started here. Use `engine.NewFileSink(fsx.DefaultStrategy())` for downloads.
+
+## Stage 0.6: `s4engine` CLI and file-drop window
+
+**Status:** done, with one check not done: **the real Explorer drag has not been performed** (see "Manual drop test"). `wails build`, `go build ./...`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...` and `staticcheck ./...` pass. `GOOS=darwin go vet` passes for engine, journal, fsx, s3x, fakes3 and `cmd/...`. No AWS calls were made and `~/.aws` was not read: credential tests use temporary `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE` files with fake values. No engine contract changed.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| CLI entry, command dispatch, exit codes | `cmd/s4engine/main.go`, `run.go` |
+| Target (fake or S3), credentials, guarded store and admin calls | `cmd/s4engine/target.go` |
+| upload and download, live progress, result file | `cmd/s4engine/transfer.go`, `metrics.go`, `mem_windows.go`, `mem_other.go` |
+| verify, generate, cleanup | `cmd/s4engine/tools.go` |
+| Size and rate parsing | `cmd/s4engine/units.go` |
+| CLI tests | `cmd/s4engine/cli_test.go`, `credentials_test.go` |
+| File-drop spike | `app.go`, `filedrop.go`, `filedrop_test.go`, `main.go`, `frontend/src/App.tsx`, `App.css` |
+
+New dependency: `github.com/aws/aws-sdk-go-v2/config` (`credentials` moved to v1.21.2). The template's logo and Greet screen are gone.
+
+### CLI usage
+
+Build it so the binary carries the commit hash (`go run` and `go test` builds report `unknown`):
+
+```powershell
+go build -o s4engine.exe ./cmd/s4engine
+```
+
+| Command | Purpose |
+|---|---|
+| `upload [flags] FILE...` | Upload files to `s4browser-test/<run-id>/<file name>`, or to `--key` for a single file |
+| `download [flags] --dest-dir DIR KEY...` | Download objects under the run prefix to `DIR\<last key segment>`. An existing file is never replaced |
+| `verify [--result F] A B` | SHA-256 of two files, exit 0 only if equal |
+| `generate --out F --size N [--seed S]` | Deterministic file (the `internal/fakes3` pattern), refuses to overwrite, prints its SHA-256 |
+| `cleanup [--dry-run] --run-id ID ...` | Abort multipart uploads and delete objects under `s4browser-test/<run-id>/` |
+
+Flags may come before or after the arguments.
+
+| Flag | Meaning |
+|---|---|
+| `--fake` | Start the TLS fake S3 inside the process (the real `s3x` adapter talks to it over HTTPS) |
+| `--profile P --region R --bucket B` | Real S3. Credentials come from the SDK config loader, so static keys and `credential_process` work. They are wrapped as `aws.NewCredentialsCache(s3x.MarkCredentialErrors(base))` |
+| `--run-id ID` | Names the only prefix the run may touch. Generated when absent (printed in the summary). Required for `cleanup` against S3 |
+| `--key K` | Upload only: destination for a single file. It must pass the guard |
+| `--parallel-files N`, `--parallel-parts N`, `--total-parts N` | `MaxActiveFiles`, `MaxPartsPerFile`, `MaxActiveParts`. Engine defaults 4, 16, 32. `--total-parts` defaults to the larger of 32 and `--parallel-parts` |
+| `--part-size 64MiB` | Preferred part size. Default is the engine default, 64 MiB |
+| `--bandwidth 5Gbit` | Cap in bits per second (`Kbit`, `Mbit`, `Gbit`) or bytes per second (`50MiB`, `625MB`). Default unlimited |
+| `--write-strategy`, `--write-lead` | Download strategy (`sparse` default = `fsx.DefaultStrategy()`, `sequential-lead`, `preallocate`, `valid-data`) and its lead |
+| `--result F` | JSON result file. Default `s4engine-<command>-<run-id>.json` in the current directory |
+| `--progress 1s` | Interval of the live progress lines (stderr) |
+| `--journal-dir D` | Default is a temporary directory that is removed when the journal is empty at exit |
+| `--seed N` | `--fake` only. Upload: after completing, the fake recomputes every part's CRC from the pattern (`fakeVerified` in the result). Download: seed of the generated object |
+| `--fake-size N` | `--fake` download only: create a synthetic object of that size at each key before downloading |
+
+Sizes accept `5368709120`, `64MiB`, `10GB`, `2TiB`.
+
+**Exit codes:** 0 success, 1 transfer or verification failure (including a mismatch), 2 usage error or a refused destination, 130 interrupted.
+
+**Ctrl+C** cancels every job, which aborts the multipart uploads, waits up to 30 s for the aborts, writes the result (`outcome: cancelled`) and exits 130. A second Ctrl+C ends the process immediately. This was checked with a real `CTRL_BREAK_EVENT` sent to the built exe (Go treats it like Ctrl+C): exit 130, result `cancelled`, journal directory removed. If an abort fails, the journal directory is kept, a warning names it, and `cleanup` finishes the job.
+
+### The write guard
+
+- Every run, fake or real, has an `engine.TestPrefixGuard` for `s4browser-test/<run-id>/`. There is no flag, environment variable or build tag that disables it. `TestNoFlagDisablesTheGuard` checks the help of every command for such an option.
+- **Order of checks:** flags, then the run ID, then every destination key against the guard, and only then are credentials loaded and a connection made. A key outside the prefix ends the command with exit 2 and `refusing to start`. `TestGuardRefusalComesBeforeCredentials` proves the order with a profile that does not exist: a bad key gives exit 2, a good key reaches credential loading and gives exit 1.
+- **During the run:** the engine has `Config.Guard`, and the store is wrapped with `fakes3.GuardStore`, which checks Create, UploadPart, Complete, Abort and Put. Cleanup goes through `guardedAdmin`, which checks every abort and delete, and refuses to list anything that is not exactly the run prefix.
+- Downloads only read, but they are also limited to the prefix, to keep the tool inside one area.
+- The fake server in `--fake` mode has the same guard and answers 403 for a refused write.
+
+### Result file
+
+One JSON file per transfer: command, outcome, error, commit (`+dirty` if the tree had changes), Go version, OS, start time, target (kind, bucket, region, profile name, run ID, prefix), settings (including the effective part size and strategy), per-file state, bytes, done bytes, parts and retries, total `bytes` completed, `durationSeconds`, `throughputBytesPerSec` and `throughputGbps` (whole run), `steadyStateBytesPerSec` (everything after the first 10 s, absent for runs of 10 s or less), `slowest10sWindowBytesPerSec` with its start time (absent below 10 s), `retries`, `peakHeapBytes` with its baseline, and `peakWorkingSetBytes`. It never holds keys, tokens or signatures, and a test checks it for the fake's key and secret.
+
+**How the numbers are measured.** A poll every 200 ms sums `DoneBytes` of all jobs. Between polls, bytes are taken to arrive at a constant rate, and windows are slid over these samples. `DoneBytes` includes in-flight progress, so a failed part's bytes briefly count and then roll back. Heap is `/memory/classes/heap/objects:bytes` sampled every 100 ms after a forced GC at the start. Working set is Windows' own peak (`PeakWorkingSetSize`), read after the engine has stopped, so it covers the whole process. Duration runs from submit to the last job reaching a terminal state.
+
+### Tests
+
+All under `-race`, against `internal/fakes3`, in `cmd/s4engine`:
+
+| Requirement | Test |
+|---|---|
+| Upload then download, hashes match, every part sent once, no temp file left | `TestUploadDownloadRoundTrip` (200 MiB + 12,345 bytes) |
+| Standalone fake download of a seeded object matches `generate` | `TestDownloadFromGeneratedFakeObject` |
+| Result file matches a transfer of known size, settings, no secrets | `TestResultFileMatchesKnownTransfer` |
+| Cancel leaves no multipart upload and no object, exit 130 | `TestCancelAbortsMultipartUpload` |
+| Transfer failure is exit 1 and leaves no file | `TestTransferFailureExitCode` |
+| Guard refusal, before any request | `TestGuardRefusesDestinationOutsidePrefix`, `TestGuardRefusalComesBeforeCredentials`, `TestGuardedAdminRefusesBeforeTheNetwork`, `TestNoFlagDisablesTheGuard` |
+| Cleanup stays inside the prefix (neighbours `c10/`, `c1`, `c1x` and other prefixes survive), dry run changes nothing | `TestCleanupStaysInsidePrefix` |
+| Throughput, steady state, slowest window | `TestComputeThroughput` |
+| Static keys, `credential_process` (the test binary is the process), a failing process is marked `ErrCredentialsUnavailable`, no secret in errors | `credentials_test.go` |
+| Usage errors give exit 2, verify, generate | `TestUsageErrors`, `TestVerifyDetectsDifference`, `TestGenerateIsDeterministicAndNeverOverwrites`, `TestParseSizeAndRate` |
+| Drop classification and log | `filedrop_test.go` |
+
+### Stage 0.7 command sequence
+
+Replace `<PROFILE>`, `<BUCKET>`, `<REGION>`. Run from `F:\s4browser` in PowerShell with the PATH from stage 0.1. Use a fixed run ID so cleanup can find the data later. The test data goes to a drive with at least 25 GB free.
+
+```powershell
+# 0. Build, so the commit hash is in the result files.
+go build -o s4engine.exe ./cmd/s4engine
+$run = "gate-$(Get-Date -Format yyyyMMdd-HHmm)"
+New-Item -ItemType Directory -Force F:\s4gate\down | Out-Null
+
+# 1. A 10 GB deterministic file. Note the SHA-256 it prints.
+.\s4engine.exe generate --out F:\s4gate\10g.bin --size 10GB --seed 1
+
+# 2. Safety check before any write: this must fail with exit 2 and make no request.
+.\s4engine.exe upload --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --key other/x.bin F:\s4gate\10g.bin
+
+# 3. What is already under the prefix (should be nothing).
+.\s4engine.exe cleanup --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --dry-run
+
+# 4. Upload with the defaults. Tune later with --parallel-parts, --total-parts, --part-size.
+.\s4engine.exe upload --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --result F:\s4gate\up-default.json F:\s4gate\10g.bin
+
+# 5. Download it back, then compare.
+.\s4engine.exe download --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --dest-dir F:\s4gate\down --result F:\s4gate\down-default.json "s4browser-test/$run/10g.bin"
+.\s4engine.exe verify F:\s4gate\10g.bin F:\s4gate\down\10g.bin
+
+# 6. Ctrl+C test: start an upload, press Ctrl+C after about 20 s, then check that nothing is left.
+.\s4engine.exe upload --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --key "s4browser-test/$run/interrupted.bin" --result F:\s4gate\up-ctrlc.json F:\s4gate\10g.bin
+.\s4engine.exe cleanup --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --dry-run   # expect 0 multipart uploads
+
+# 7. Repeat 4 and 5 with other settings, for example:
+#    --parallel-parts 32 --total-parts 64 --part-size 128MiB
+# Use another key (--key) for each upload, and a new --dest-dir for each download,
+# because an existing local file is never replaced. To compare download strategies
+# on the real media drive add --write-strategy sparse | sequential-lead | preallocate.
+
+# 8. Remove everything under the prefix, then confirm the prefix is empty.
+.\s4engine.exe cleanup --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run
+.\s4engine.exe cleanup --profile <PROFILE> --region <REGION> --bucket <BUCKET> --run-id $run --dry-run
+```
+
+Read the result files for the gate: `steadyStateBytesPerSec` against 80% of the measured line rate, `slowest10sWindowBytesPerSec` (a long collapse is a failure even when the average passes), `retries`, `peakHeapBytes` and `peakWorkingSetBytes` against `engine.MemoryBound`, and `commit` (it must not say `unknown` or `+dirty`).
+
+### Manual drop test (not performed)
+
+I cannot drag from Explorer in this session. What was checked: `wails build` succeeds, the built `s4browser.exe` starts with the title "s4browser file-drop spike" and creates its (empty) log file, and the classification and log code is unit tested. **Whether Windows actually delivers absolute paths to the callback is unverified.** To check it:
+
+1. Run `F:\s4browser\build\bin\s4browser.exe` (rebuild with `wails build` first if sources changed). The window shows the log path, `%AppData%\s4browser\filedrop.log`.
+2. Make the test items: a file, a folder (with a subfolder), and a second file.
+3. Select **one file** in Explorer and drag it onto the window. Expect one entry `file  <absolute path>`.
+4. Drag **one folder**. Expect `folder  <absolute path>` (the folder's own path, not its contents).
+5. Select **a file, a folder and another file together** and drag them. Expect three entries in one drop, each with its own kind.
+6. Drop one file from a **network share or another drive**, and one with a space and a non-ASCII character in the path.
+7. Open the log file. Each drop should have a header line with the item count and one line per path with `absolute=true`. The paths on screen and in the log must be identical.
+8. Check that dropping did not make the window navigate to the file, and that `s4browser.exe` is **not elevated**: if it runs as administrator, Explorer cannot drag into it (Windows blocks it).
+
+If step 3 shows nothing: Wails delivers paths through WebView2's `postMessageWithAdditionalObjects`, which needs WebView2 1.0.1774.30 or newer (this machine has 157.0.4341.46). `DisableWebViewDrop` is deliberately not set, because it turns off the WebView2 drop that the path resolution may depend on. The Wails docs example sets it together with `EnableFileDrop`, so it is worth trying if a drop navigates the window instead.
+
+### Open risks
+
+- **Real S3 is still unverified.** Nothing here has run against AWS: the diagnostic GET, error codes, composite checksum format and ranged GETs are all stage 0.7 questions. Credential loading from `credential_process` is tested with a local helper process only.
+- **Double credential cache.** `config.LoadDefaultConfig` already returns a cache, and the wrapper required by the docs puts another around it. Probe invalidates both, but the outer cache holds a credential until its own expiry, so a credential that the SDK would refresh early is refreshed late. A real `credential_process` with short-lived credentials (SSO, assume-role) should be watched on a long run.
+- **`cleanup` does not touch versions.** It lists with `ListObjectsV2` and deletes with `DeleteObject`. If the bucket has versioning, this leaves delete markers and non-current versions that keep costing money. Confirm versioning before 0.7, as the plan says, and remove versions by hand if it is on.
+- **The CLI links `internal/fakes3`** for `GuardStore` and the in-process fake. It is a test package in a production binary. Harmless for a test tool, but stage 1 should move the guard decorators out of `fakes3` before the app uses them.
+- **The slowest-window figure includes ramp-up and Complete.** The first 10 s window starts at zero, so it can report connection set-up as the slowest window. Read it with the start time in the result. The steady state skips only the first 10 s.
+- **A multi-file run reports whole-run figures for all files together.** Use one file at a time for per-file line-rate numbers.
+- **Fake objects are synthetic.** With `--fake`, only `--fake-size` objects can be downloaded in a fresh process, and uploaded fake objects can be read back only in the same process (the fake keeps no data).
+- **The drop window sends the frontend only path strings.** It does not read files. Folder contents are not expanded: that is stage 2.3.
+- **A stale `s4engine-*.json` or `s4engine.exe` in the repo root is git-ignored,** but a result file written elsewhere is not.
+
+### Next
+
+Stage 0.7 (the real AWS gate, Opus) starts from this commit. It needs the profile, bucket and region, a measured speed-test result, and a decision on whether the bucket has versioning. It is not started here.

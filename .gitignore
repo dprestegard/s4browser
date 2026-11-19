@@ -26,3 +26,7 @@ secrets*.json
 *.swp
 Thumbs.db
 desktop.ini
+
+# s4engine build output and result files written to the working directory
+/s4engine.exe
+/s4engine-*.json
