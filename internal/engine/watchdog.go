@@ -41,9 +41,9 @@ func (w *watchdog) remove(entry *watchedAttempt) {
 	delete(w.attempts, entry)
 }
 
-func (w *watchdog) limit(phase AttemptPhase) time.Duration {
+func (w *watchdog) limit(phase AttemptPhase, activity *AttemptActivity) time.Duration {
 	if phase == AttemptAwaitResponse {
-		return w.timeouts.Response
+		return w.timeouts.Response + activity.Drain()
 	}
 	return w.timeouts.Stall
 }
@@ -59,7 +59,7 @@ func (w *watchdog) scan() {
 			continue
 		}
 		entry.idle += WatchdogTick
-		if entry.idle >= w.limit(phase) {
+		if entry.idle >= w.limit(phase, entry.activity) {
 			entry.cancel(ErrStalled)
 		}
 	}

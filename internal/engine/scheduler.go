@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,6 +68,13 @@ type scheduler struct {
 
 	probes map[string]*probeState
 
+	// sendBuffer is Config.SendBuffer with the default applied. connRateEst is
+	// the loop's per-connection upload rate estimate in bytes per second, and
+	// connRate publishes it to upload bodies. See observeUpload.
+	sendBuffer  int64
+	connRateEst float64
+	connRate    atomic.Int64
+
 	transitions []Transition
 	resync      bool
 	batchSeq    uint64
@@ -102,6 +110,10 @@ func New(cfg Config) (Engine, error) {
 		jobs:         make(map[JobID]*job),
 		probes:       make(map[string]*probeState),
 		timer:        cfg.Clock.NewTimer(time.Hour),
+		sendBuffer:   cfg.SendBuffer,
+	}
+	if s.sendBuffer == 0 {
+		s.sendBuffer = DefaultSendBuffer
 	}
 	s.timer.Stop()
 	s.baseCtx, s.baseCancel = context.WithCancelCause(context.Background())
@@ -143,6 +155,9 @@ func validateConfig(cfg Config) error {
 	}
 	if err := cfg.Settings.Validate(); err != nil {
 		return err
+	}
+	if cfg.SendBuffer < 0 {
+		return fmt.Errorf("%w: negative SendBuffer", ErrInvalidConfig)
 	}
 	t := cfg.Timeouts
 	if t.Stall <= 0 || t.Response <= 0 || t.Control <= 0 || t.Complete <= 0 || t.ShutdownAbort <= 0 || t.ProbeMin <= 0 || t.ProbeMax < t.ProbeMin {

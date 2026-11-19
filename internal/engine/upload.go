@@ -43,8 +43,12 @@ func (s *scheduler) startPart(j *job) {
 		activity:    activity,
 		limiter:     s.upload,
 		transferred: &j.transferred,
+		clock:       s.cfg.Clock,
+		sendBuffer:  s.sendBuffer,
+		connRate:    &s.connRate,
 	}
 	ref, uploadID, single := j.spec.Ref, j.uploadID, j.singlePut
+	started := s.cfg.Clock.Now()
 
 	s.spawn(func() func() {
 		defer cancel(nil)
@@ -68,11 +72,47 @@ func (s *scheduler) startPart(j *job) {
 			}
 		}
 		class := ClassifyAttempt(ctx, err)
+		stalledAwaiting := body.sent.Load() && errors.Is(context.Cause(ctx), ErrStalled)
 		return func() {
 			s.watchdog.remove(entry)
+			s.observeUpload(span.Length, started, class == ClassNone, stalledAwaiting)
 			s.onPartDone(j, index, body.retire(), result.ETag, sum, class, err)
 		}
 	})
+}
+
+// observeUpload maintains the per-connection upload rate estimate that sizes
+// the drain allowance (meteredBody.drainAllowance).
+//
+// A finished attempt of at least one send buffer gives a sample: its length over
+// its whole duration, which includes connecting and the server's latency, so it
+// is lower than the link and the allowance it gives is generous. Samples are
+// averaged. An attempt the watchdog stopped after its whole body was read gives
+// an upper bound instead, and the estimate is halved below it. Repeated stalls
+// therefore keep doubling the allowance until it covers the real drain time,
+// while a dead connection is still detected within MaxDrainAllowance.
+func (s *scheduler) observeUpload(length int64, started time.Time, ok, stalledAwaiting bool) {
+	elapsed := s.cfg.Clock.Now().Sub(started).Seconds()
+	if elapsed <= 0 {
+		return
+	}
+	sample := float64(length) / elapsed
+	switch {
+	case ok && length >= s.sendBuffer:
+		if s.connRateEst == 0 {
+			s.connRateEst = sample
+		} else {
+			s.connRateEst = 0.75*s.connRateEst + 0.25*sample
+		}
+	case stalledAwaiting && length >= MeterQuantum:
+		if s.connRateEst == 0 || sample < s.connRateEst {
+			s.connRateEst = sample
+		}
+		s.connRateEst /= 2
+	default:
+		return
+	}
+	s.connRate.Store(max(int64(s.connRateEst), 1))
 }
 
 func decodeCRC32(encoded string) (uint32, bool) {

@@ -32,10 +32,12 @@ var testRef = engine.ObjectRef{Profile: "work", Region: fakes3.Region, Bucket: f
 type scriptedProber struct {
 	failures atomic.Int32
 	calls    atomic.Int32
+	last     atomic.Pointer[engine.ObjectRef]
 }
 
-func (p *scriptedProber) Probe(context.Context, string) error {
+func (p *scriptedProber) Probe(_ context.Context, ref engine.ObjectRef) error {
 	p.calls.Add(1)
+	p.last.Store(&ref)
 	if p.failures.Add(-1) >= 0 {
 		return errors.New("credentials still unavailable")
 	}
@@ -84,6 +86,8 @@ type options struct {
 	sink engine.Sink
 	// discardProgress drops batches, so that memory tests do not measure them.
 	discardProgress bool
+	// sendBuffer sets Config.SendBuffer.
+	sendBuffer int64
 }
 
 type discardObserver struct{}
@@ -157,6 +161,7 @@ func newHarness(t *testing.T, opts options) *harness {
 		Store: objectStore, Source: h.source, Sink: sink,
 		Journal: journalStore, Prober: h.prober, Clock: engine.RealClock{}, Observer: observer, Guard: guard,
 		Jitter: func() float64 { return 0.5 }, Settings: settings, Retry: retry, Timeouts: timeouts,
+		SendBuffer: opts.sendBuffer,
 	})
 	if err != nil {
 		t.Fatal(err)

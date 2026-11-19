@@ -170,6 +170,9 @@ type Rule struct {
 	FromAttempt int
 	// RangeStart matches a ranged GET that starts at this offset.
 	RangeStart *int64
+	// AccessKey matches requests signed with this access key ID, so a test can
+	// expire one set of credentials while another keeps working.
+	AccessKey string
 	// Times limits how often the rule fires. 0 means no limit.
 	Times int
 	Fault Fault
@@ -204,6 +207,8 @@ func (r *installedRule) matches(info *reqInfo, attempt int) bool {
 	case rule.FromAttempt != 0 && attempt < rule.FromAttempt:
 		return false
 	case rule.RangeStart != nil && (info.rangeStart < 0 || *rule.RangeStart != info.rangeStart):
+		return false
+	case rule.AccessKey != "" && rule.AccessKey != info.accessKey:
 		return false
 	}
 	return true

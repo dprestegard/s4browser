@@ -19,6 +19,9 @@ func newTestBody(t *testing.T, ctx context.Context, data []byte, length int64, c
 		activity:    new(AttemptActivity),
 		limiter:     newRateLimiter(RealClock{}, 0),
 		transferred: counter,
+		clock:       RealClock{},
+		sendBuffer:  DefaultSendBuffer,
+		connRate:    new(atomic.Int64),
 	}
 }
 

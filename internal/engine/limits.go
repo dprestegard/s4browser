@@ -70,6 +70,13 @@ const (
 	// MaxBufferedTransitions bounds transitions waiting for the Observer. On
 	// overflow the oldest are dropped and ProgressBatch.Resync is set.
 	MaxBufferedTransitions = 4096
+	// DefaultSendBuffer is the socket send buffer internal/s3x gives every
+	// connection, and the default of Config.SendBuffer. When an upload body has
+	// been read, up to this much can still be waiting in the socket.
+	DefaultSendBuffer = 4 * MiB
+	// MaxDrainAllowance caps the time the watchdog adds to Timeouts.Response for
+	// a send buffer to drain. See AttemptActivity.SetDrain.
+	MaxDrainAllowance = 20 * time.Minute
 )
 
 // Timeouts holds the deadlines applied to requests. Zero values are invalid;

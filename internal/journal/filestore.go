@@ -35,6 +35,9 @@ type FileStore struct {
 	entries  map[string]Entry
 	warnings []string
 	closed   bool
+
+	// loaded is the journal as it was found at open, sorted by ID. It never changes.
+	loaded []Entry
 }
 
 var _ Store = (*FileStore)(nil)
@@ -60,6 +63,7 @@ func OpenFile(dir string) (*FileStore, error) {
 		_ = lock.release()
 		return nil, err
 	}
+	store.loaded = store.List()
 	return store, nil
 }
 
@@ -93,6 +97,11 @@ func (s *FileStore) load() error {
 		return err
 	}
 }
+
+// Loaded returns the entries found when the store was opened: the previous
+// session's unfinished work, which launch cleanup owns. Entries written since
+// are not included.
+func (s *FileStore) Loaded() []Entry { return slices.Clone(s.loaded) }
 
 // Warnings returns problems found while opening the journal, for the user.
 func (s *FileStore) Warnings() []string {

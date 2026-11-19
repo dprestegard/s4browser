@@ -102,6 +102,10 @@ type Config struct {
 	Settings Settings
 	Retry    RetryPolicy
 	Timeouts Timeouts
+	// SendBuffer is how many bytes the transport can still hold once an upload
+	// body has been read: the socket send buffer. The watchdog allows time for
+	// it to drain before Timeouts.Response starts. 0 means DefaultSendBuffer.
+	SendBuffer int64
 }
 
 // Engine is the transfer engine. All methods are safe for concurrent use.

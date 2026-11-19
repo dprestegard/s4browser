@@ -1,6 +1,9 @@
 package engine
 
-import "sync/atomic"
+import (
+	"sync/atomic"
+	"time"
+)
 
 // AttemptPhase says what an in-flight attempt is waiting for, which selects the
 // watchdog's timeout.
@@ -23,6 +26,7 @@ type AttemptActivity struct {
 	ticks  atomic.Uint64
 	phase  atomic.Uint32
 	parked atomic.Int32
+	drain  atomic.Int64
 }
 
 // Touch records that bytes moved.
@@ -43,6 +47,14 @@ func (a *AttemptActivity) Unpark() {
 	a.parked.Add(-1)
 	a.ticks.Add(1)
 }
+
+// SetDrain records how long the bytes still in the socket may take to leave
+// once the body has been read. The watchdog adds it to Timeouts.Response, so a
+// slow link is not taken for a stalled one while its send buffer empties.
+func (a *AttemptActivity) SetDrain(d time.Duration) { a.drain.Store(int64(d)) }
+
+// Drain returns the value set by SetDrain.
+func (a *AttemptActivity) Drain() time.Duration { return time.Duration(a.drain.Load()) }
 
 // Observe returns the state read by the watchdog.
 func (a *AttemptActivity) Observe() (ticks uint64, phase AttemptPhase, parked bool) {

@@ -844,7 +844,7 @@ Stage 1.4 (virtualized browser table and navigation) starts from this commit. It
 
 ## Stage 1.4: virtualized browser table and navigation
 
-**Status:** done and not committed (waiting for the user's go-ahead). `wails build`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (also with `-tags devfake`) and `tsc --noEmit` pass. No AWS calls were made and `~/.aws` was not read: the hands-on run used temporary AWS files with fake values and the devfake S3.
+**Status:** done, committed as `780f3b1`. `wails build`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (also with `-tags devfake`) and `tsc --noEmit` pass. No AWS calls were made and `~/.aws` was not read: the hands-on run used temporary AWS files with fake values and the devfake S3.
 
 ### What exists
 
@@ -881,3 +881,84 @@ Stage 1.4 (virtualized browser table and navigation) starts from this commit. It
 ### Next
 
 Stage 2.1 (retry, pause, resume, credential recovery, orphan cleanup, Opus) is next in the plan. It is not started here.
+
+## Stage 2.1: retry, pause, in-session resume, credential recovery, orphan cleanup
+
+**Status:** done, not committed (waiting for the user's go-ahead). The fault suite passes, including killing a real process mid-transfer and relaunching. `wails build`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (also with `-tags devfake`) pass. `GOOS=darwin go vet` passes for engine, journal, fsx, s3x, fakes3, creds, faultsuite and `cmd/...`. One full non-race run failed only in `internal/browse` (`TestHundredThousandObjects` sorted in 713 ms against its 500 ms limit while every package ran at once); it passes alone and no browse code changed. No AWS calls were made and `~/.aws` was not read: credential tests use temporary AWS files with fake session keys, and every S3 request went to the local HTTPS fake.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Launch cleanup: `journal.Recovery` (implements `Recoverer`), `FileStore.Loaded` | `internal/journal/recover.go`, `filestore.go` |
+| Production `RemoteCleaner`, `CredentialProber`, per-profile client factory | `internal/s3x/recovery.go` (`NewCleaner`, `NewProber`, `ProbeAccess`, `NewClients`) |
+| Credential change notifications, `Reload`, `Prober` | `internal/creds/manager.go`. `profiles.go`: `CheckProfile` now calls `Reload` |
+| Drain allowance for slow links | `internal/engine/body.go`, `activity.go`, `watchdog.go`, `upload.go` (`observeUpload`), `limits.go` |
+| The probe receives the waiting job's object | `internal/engine/credentials.go`, `seams.go` |
+| Fault suite (tests only) | `internal/faultsuite/`: `rig_test.go`, `kill_test.go`, `faults_test.go`, `creds_test.go`, `intent_test.go` |
+| Fake S3 rules can match an access key | `internal/fakes3/fault.go` (`Rule.AccessKey`) |
+
+### How the open items were resolved
+
+| Item from earlier stages | Resolution |
+|---|---|
+| Orphaned uploads and temp files | `journal.NewRecovery` and `Recover`: in the background, 4 entries in parallel, 5 tries per request, `ErrCredentials` deferred. Active entries are aborted by ID, creating entries by `MatchesIntent`, and a temp file is deleted only if `fsx.IsTempPath` accepts its name. Design section 11 |
+| Guard intent matching | Recovery owns only the launch set (`FileStore.Loaded`). For a creating entry it lists first, then reads the journal, and defers if any entry of this session names the same bucket and key. A recorded upload ID is never aborted by intent. A job's intent is durable before its Create, so this order rules out aborting a live upload |
+| Production `CredentialProber` | `creds.Manager.Prober(clients)`: `Manager.Refresh`, then a signed one-byte `GetObject` of the waiting job's object. Only an answer S3 gives after authenticating counts (`NoSuchKey`, `AccessDenied`, success). An expired session whose file is unchanged loads, and still fails the probe |
+| Whatever changes keys notifies | `Manager.OnCredentialsChanged` fires after `AddKeys`, `UpdateKeys`, `Delete` and `Reload`. The prober uses `Refresh`, so a probe never starts a probe. Connecting it to `NotifyCredentialsChanged` and `RecoverProfile` is stage 2.2 |
+| Kill and relaunch | The test binary runs the app as a child process. The test kills it with `Process.Kill` (TerminateProcess) and relaunches: upload, after-Create and download cases |
+| Slow links looked like stalls | The timeout is scaled: the await limit is `Response` plus a drain allowance, from the attempt's own measured rate (bodies over two buffers) or the engine's per-connection estimate, which halves on each await-phase stall. Capped at 20 min. Design section 9 |
+| Double credential cache | The app builds every client from `Manager.Provider`: one `aws.CredentialsCache` per profile with a one-minute window. The SDK does not wrap an existing cache (`TestClientsAreSharedPerProfileAndRegion`). `s3x.NewClients(manager.Provider)` is the factory for stage 2.2. The CLI keeps its own loader and its double cache |
+| Session-key profiles | Jobs wait until a new sign-in. Each probe reads the file again, so new keys are picked up within `ProbeMax` (60 s) with no click, or at once through `Reload` |
+
+### Contract changes
+
+- **`engine.CredentialProber.Probe(ctx, ref ObjectRef)`** replaces `Probe(ctx, profile string)`. The engine passes the first waiting job's object. Design section 10. The CLI now uses `s3x.NewProber` with its own reload, so it also probes S3.
+- **`engine.Config.SendBuffer`** (0 means `engine.DefaultSendBuffer`, 4 MiB), `engine.MaxDrainAllowance`, `AttemptActivity.SetDrain` and `Drain`. `s3x.SendBufferSize` is now defined from `engine.DefaultSendBuffer`.
+- Additive: `journal.Recovery`, `NewRecovery`, `RecoveryOptions`, `FileStore.Loaded`. `s3x.NewClients`, `NewProber`, `ProbeAccess`, `NewCleaner`. `creds.Manager.OnCredentialsChanged`, `Reload`, `Prober`. `fakes3.Rule.AccessKey`.
+- Package graph: `internal/journal` now imports `internal/fsx`, and `internal/s3x` imports `internal/journal`. Design section 1.
+
+### Evidence
+
+All against the HTTPS fake through `s3x.Store`, `s3x.TuneTransport` and the file journal, unless noted. Each test ends with a goroutine leak check.
+
+| Requirement | Test |
+|---|---|
+| Kill during upload, after a lost Create response left an orphan. Relaunch aborts both uploads, empties the journal, and the same file then uploads | `TestKillDuringUploadThenRelaunch` |
+| Kill after Create and before the ID is durable: found by intent | `TestKillAfterCreateBeforeIDIsDurable` |
+| Kill during a large download: temp file and entry removed, a new download is byte-exact | `TestKillDuringDownloadThenRelaunch` |
+| A second instance cannot open the live journal (checked in each kill test) | `runAndKill` |
+| 503 storm, resets mid-body, lost part response, SlowDown with Retry-After, watchdog stall, control-request errors, lost Complete: each completes and stores every part once | `TestUploadFaultsOverHTTPS` |
+| Download faults: 503, reset, truncate, stall, HEAD 503. Every byte written once | `TestDownloadFaultsOverHTTPS` |
+| Nothing is sent while paused, and resume sends only unfinished parts. A part S3 stored just as the pause cancelled it may be sent once more, and the test allows exactly those | `TestPauseAndResumeOverHTTPS` |
+| Pause during a credential wait, resume, wait again, recover | `TestPauseDuringCredentialWaitOverHTTPS` |
+| Cancel while expired: the abort fails, the entry stays, the next launch aborts | `TestCancelWhileCredentialsExpiredThenRelaunch` |
+| Close during Complete: outcome unknown, the next launch finds the upload gone and drops the entry | `TestCloseKeepsUnknownOutcomeForNextLaunch` |
+| The session expires mid-upload. With the file unchanged, real probes keep the job waiting. A new sign-in resumes it with no notification, no part sent again and no retry charged | `TestSessionExpiresDuringUpload` |
+| `Reload` resumes a waiting job at once (probes an hour apart) | `TestReloadResumesWaitingJobAtOnce` |
+| Launch cleanup waits for credentials and finishes on `Reload` | `TestLaunchCleanupWaitsForCredentials` |
+| Prober answers: expired, `NoSuchKey`, `AccessDenied`, 503, reset, invalid key, credentials that do not load (no request sent), no notification | `TestProberRequiresS3ToAcceptCredentials` |
+| A new upload of the same key survives launch cleanup, and the orphan is removed afterwards | `TestLaunchCleanupSparesNewUploadOfSameKey`, `TestLaunchCleanupRacesNewUploads` (cleanup in a loop while 6 jobs start) |
+| Recovery unit cases: launch set, read-after-list order, window, retries, parallel bound, temp names, context | `internal/journal/recover_test.go` |
+| Cleaner paging (1,005 uploads), gone, credential marking. One client and one cache per profile and region | `internal/s3x/recovery_test.go` |
+| Slow link: drain from the attempt's own rate, from earlier attempts, and learned from stalls (an in-process store that models a socket buffer) | `TestSlowLinkIsNotAStall`, `TestSlowLinkLearnsFromStalls` |
+| Notifications | `TestCredentialChangesAreAnnounced` |
+
+**Tests of the tests.** 20 deliberate bugs, each caught: journal read before listing, no session-entry guard, launch set from `List` instead of `Loaded`, no temp-name check, credential errors retried, deferred entries deleted, no intent window, unbounded parallelism, prober skipping the S3 request, probe passing on credential codes, `NoSuchUpload` not mapped to gone, no listing pages, cleaner credential errors unmarked, no drain allowance, no own-rate measurement, no halving on stalls, no success samples, `UpdateKeys` silent, prober using `Reload`, probe given an empty object. The halving bug was missed at first, because growth by one `Response` per stall still converged. The test now uses an 8 s drain and allows at most 3 retries, which only the halving meets.
+
+### Open risks
+
+- **`TestHundredThousandObjects` (stage 1.2) has a wall-clock limit** that a fully loaded machine can miss when all packages test in parallel.
+
+- **Nothing is wired into the app yet.** Stage 2.2 must open the journal and create `journal.NewRecovery` before the engine; run `Recover` in the background and show `Report.Warnings` and `FileStore.Warnings`; build the store, prober and cleaner from `s3x.NewClients(manager.Provider)`; and connect `OnCredentialsChanged` to `NotifyCredentialsChanged` and `RecoverProfile`, the latter in a goroutine because it waits on S3. `ErrUnsupportedVersion` must disable uploads.
+- **Real S3 is unverified for the new requests:** the one-byte probe on a missing key, `ListMultipartUploads` paging and `Initiated` times, and the codes S3 returns for an expired session token. Stage 4.3 should run the credential expiry check.
+- **Intent matching still trusts the time window** for uploads by other clients to the same key, as designed. A launch entry whose key the user uploads again in this session is deferred until that job ends, then cleaned by the next `Recover`, `RecoverProfile` or launch.
+- **The drain allowance is an estimate.** Once the estimate is low, a connection that dies right after its body was sent can take up to `Response` plus 20 min to be noticed. The slow-link tests model a socket buffer in process. They do not throttle a real network.
+- **The fake's reset sends a 200 header first,** because its `hijack` flushes, so a reset at byte 0 looks like a broken 200 response. The prober reads the body to cope. Engine attempts already treat a 2xx with a broken body as retryable.
+- **A `credential_process` helper runs on every probe,** 5 to 60 s apart, while jobs wait.
+- **Downloads of 64 MiB or less are still not journaled,** so a crash can leave their temp file.
+- **The CLI keeps the double credential cache.** It matters only for short-lived credentials on long CLI runs.
+
+### Next
+
+Stage 2.2 (queue service and Wails bindings) starts from this commit. It is not started here.

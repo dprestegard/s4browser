@@ -86,7 +86,8 @@ func (a *App) DeleteProfile(id string) error {
 }
 
 // CheckProfile loads a profile's credentials again, running its helper if it has
-// one. It makes no AWS request.
+// one. It makes no AWS request. Success tells transfers waiting for this
+// profile's credentials to try again.
 func (a *App) CheckProfile(id string) ProfileCheck {
 	m, err := a.profileManager()
 	if err != nil {
@@ -94,7 +95,7 @@ func (a *App) CheckProfile(id string) ProfileCheck {
 	}
 	ctx, cancel := context.WithTimeout(a.ctx, profileCheckTimeout)
 	defer cancel()
-	st, err := m.Refresh(ctx, id)
+	st, err := m.Reload(ctx, id)
 	if err != nil {
 		return ProfileCheck{Message: err.Error()}
 	}

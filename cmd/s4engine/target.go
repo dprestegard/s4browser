@@ -136,13 +136,13 @@ func newTarget(ctx context.Context, c *commonFlags, guard *engine.TestPrefixGuar
 		kind: "s3", profile: c.profile, region: c.region, bucket: c.bucket, guard: guard, close: func() {},
 		store:  fakes3.GuardStore(s3x.NewStore(s3x.StaticClient(client)), guard),
 		admin:  guardedAdmin{sdkAdmin{client}, guard},
-		prober: creds,
+		prober: s3x.NewProber(creds.Reload, s3x.StaticClient(client)),
 	}, nil
 }
 
 type okProber struct{}
 
-func (okProber) Probe(context.Context, string) error { return nil }
+func (okProber) Probe(context.Context, engine.ObjectRef) error { return nil }
 
 // awsCredentials holds the credential chain of one profile.
 type awsCredentials struct {
@@ -172,9 +172,9 @@ func loadCredentials(ctx context.Context, profile, region string) (*awsCredentia
 	return ac, nil
 }
 
-// Probe implements engine.CredentialProber: drop cached credentials and fetch
-// new ones.
-func (a *awsCredentials) Probe(ctx context.Context, _ string) error {
+// Reload drops both cached credentials and fetches new ones. The engine's
+// prober (s3x.NewProber) calls it before proving the result with a request.
+func (a *awsCredentials) Reload(ctx context.Context, _ string) error {
 	if a.loaded != nil {
 		a.loaded.Invalidate()
 	}

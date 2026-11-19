@@ -110,8 +110,14 @@ type ObjectStore interface {
 
 // CredentialProber checks whether a profile's credentials work again.
 type CredentialProber interface {
-	// Probe discards cached credentials and fetches new ones. nil means retry.
-	Probe(ctx context.Context, profile string) error
+	// Probe discards ref.Profile's cached credentials, loads them again and
+	// proves that S3 accepts them with one signed request for ref, which is the
+	// object of a job waiting for them. nil means the waiting jobs resume.
+	//
+	// Loading alone is not proof: an expired session whose file has not changed
+	// still loads. A response that S3 could only send after authenticating the
+	// request, such as AccessDenied or NoSuchKey, is proof.
+	Probe(ctx context.Context, ref ObjectRef) error
 }
 
 // SourceStat identifies a source file's content for change detection.

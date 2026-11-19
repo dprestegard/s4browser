@@ -78,8 +78,7 @@ func TestLoadStaticKeys(t *testing.T) {
 	if c.cfg.Region != "eu-west-1" {
 		t.Fatalf("region %q", c.cfg.Region)
 	}
-	var _ engine.CredentialProber = c
-	must(t, c.Probe(context.Background(), "static"))
+	must(t, c.Reload(context.Background(), "static"))
 }
 
 func TestLoadCredentialProcess(t *testing.T) {
@@ -94,8 +93,8 @@ func TestLoadCredentialProcess(t *testing.T) {
 	if !got.CanExpire {
 		t.Fatal("an expiring credential_process result must be refreshable")
 	}
-	// Probe empties both caches and runs the process again.
-	must(t, c.Probe(context.Background(), "proc"))
+	// Reload empties both caches and runs the process again.
+	must(t, c.Reload(context.Background(), "proc"))
 }
 
 func TestCredentialFailuresAreMarked(t *testing.T) {
@@ -106,7 +105,7 @@ func TestCredentialFailuresAreMarked(t *testing.T) {
 	if !errors.Is(err, engine.ErrCredentialsUnavailable) {
 		t.Fatalf("a failing credential_process must match ErrCredentialsUnavailable: %v", err)
 	}
-	if err := c.Probe(context.Background(), "proc"); err == nil {
+	if err := c.Reload(context.Background(), "proc"); err == nil {
 		t.Fatal("the probe must fail while the process fails")
 	}
 	if cls := engine.Classify(err); cls != engine.ClassCredential {

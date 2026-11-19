@@ -19,8 +19,9 @@ const (
 	// SendBufferSize is the socket send buffer of every S3 connection. Windows
 	// gives a Go socket 64 KiB, which caps a connection at about 64 KiB per round
 	// trip: 2.7 MiB/s at the 29 ms measured to S3 in stage 0.7. 4 MiB allows about
-	// 140 MiB/s per connection at that latency.
-	SendBufferSize = 4 * 1024 * 1024
+	// 140 MiB/s per connection at that latency. The engine's watchdog allows
+	// time for this much to drain after a body is read, so the two must match.
+	SendBufferSize = int(engine.DefaultSendBuffer)
 
 	dialTimeout   = 30 * time.Second
 	dialKeepAlive = 30 * time.Second

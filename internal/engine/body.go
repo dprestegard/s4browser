@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // errBodyRetired stops a read that outlives its attempt. net/http may keep
@@ -27,9 +28,20 @@ type meteredBody struct {
 	// transferred is the job's progress counter.
 	transferred *atomic.Int64
 
-	position int64 // Offset of the next Read within the section.
-	pending  int64 // Bytes read but not yet published.
-	started  bool
+	// Drain estimate inputs: the clock, the transport's send buffer and the
+	// engine's per-connection upload rate estimate in bytes per second (0 when
+	// unknown). See drainAllowance.
+	clock      Clock
+	sendBuffer int64
+	connRate   *atomic.Int64
+
+	position  int64 // Offset of the next Read within the section.
+	pending   int64 // Bytes read but not yet published.
+	started   bool
+	firstRead time.Time
+
+	// sent is set once the whole body has been read.
+	sent atomic.Bool
 
 	// localErr is the first failure reading local data. The attempt reports it
 	// instead of whatever the HTTP stack makes of the failed read.
@@ -43,6 +55,7 @@ type meteredBody struct {
 func (b *meteredBody) Read(p []byte) (int, error) {
 	if !b.started {
 		b.started = true
+		b.firstRead = b.clock.Now()
 		b.activity.SetPhase(AttemptSend)
 	}
 	n, err := b.section.Read(p)
@@ -66,6 +79,8 @@ func (b *meteredBody) Read(p []byte) (int, error) {
 		if flushErr := b.flush(); flushErr != nil {
 			return n, flushErr
 		}
+		b.activity.SetDrain(b.drainAllowance(b.clock.Now()))
+		b.sent.Store(true)
 		b.activity.SetPhase(AttemptAwaitResponse)
 		return n, io.EOF
 	default:
@@ -121,9 +136,44 @@ func (b *meteredBody) Seek(offset int64, whence int) (int64, error) {
 			b.published = 0
 		}
 		b.mu.Unlock()
+		b.sent.Store(false)
+		b.activity.SetDrain(0)
 		b.activity.SetPhase(AttemptAwaitResponse)
 	}
 	return position, nil
+}
+
+// drainAllowance estimates how long the bytes still in the socket need to leave
+// once the body has been read. Up to min(length, sendBuffer) bytes can be there.
+//
+// The rate is the slower of two estimates. The engine's per-connection estimate
+// comes from earlier attempts. This attempt's own lower bound needs a body of
+// more than two buffers: by EOF at least length-sendBuffer bytes have left the
+// socket since the first read, so the link moves at least that much per elapsed
+// second. A smaller body fits in the buffer at once and says nothing about the
+// link. With no estimate at all the allowance is 0, and an await-phase stall
+// teaches the engine one (scheduler.observeUpload).
+func (b *meteredBody) drainAllowance(now time.Time) time.Duration {
+	buffered := min(b.length, b.sendBuffer)
+	if buffered <= 0 {
+		return 0
+	}
+	rate := float64(b.connRate.Load())
+	if b.length > 2*b.sendBuffer {
+		if elapsed := now.Sub(b.firstRead).Seconds(); elapsed > 0 {
+			if own := float64(b.length-b.sendBuffer) / elapsed; rate == 0 || own < rate {
+				rate = own
+			}
+		}
+	}
+	if rate <= 0 {
+		return 0
+	}
+	seconds := float64(buffered) / rate
+	if seconds >= MaxDrainAllowance.Seconds() {
+		return MaxDrainAllowance
+	}
+	return time.Duration(seconds * float64(time.Second))
 }
 
 // retire ends the body's right to change progress and returns the bytes it

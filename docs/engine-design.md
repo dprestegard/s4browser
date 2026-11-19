@@ -8,8 +8,11 @@ Facts were checked on 2026-11-17 against the AWS documentation and these SDK ver
 
 ```
 internal/engine  -> internal/journal, internal/fsx       (no AWS SDK, no OS-specific code)
-internal/s3x     -> internal/engine, AWS SDK             (implements engine.ObjectStore)
-internal/fakes3  -> internal/engine                      (implements engine.ObjectStore, serves HTTPS)
+internal/journal -> internal/fsx                         (launch cleanup checks temp file names)
+internal/s3x     -> internal/engine, internal/journal, AWS SDK
+                                                         (ObjectStore, CredentialProber, RemoteCleaner)
+internal/creds   -> internal/s3x, AWS SDK                (profiles, credential providers, the prober)
+internal/fakes3  -> internal/engine, internal/journal    (implements engine.ObjectStore, serves HTTPS)
 ```
 
 `internal/engine` and `internal/journal` must pass `GOOS=darwin go vet`. Windows code goes in `_windows.go` files in `internal/fsx`.
@@ -286,7 +289,7 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 | `Expect: 100-continue` | Added for bodies over 2 MiB | Keep the transport's 1 s `ExpectContinueTimeout`. A zero value sends the body without waiting |
 | Error inside a 200 | Complete and UploadPart surface these as API errors | Classified by code, already covered |
 
-**Transport settings for stage 0.4:** the SDK default `MaxIdleConnsPerHost` is 10, which would force repeated TLS handshakes. Set `MaxConnsPerHost` to 0, and both `MaxIdleConns` and `MaxIdleConnsPerHost` to `MaxActivePartsLimit`. Set read and write buffers to 64 KiB. Set each connection's socket send buffer to `s3x.SendBufferSize` (4 MiB). Windows gives a Go socket 64 KiB, which limited each real S3 upload connection to about 2.7 MiB/s at a 29 ms round trip (stage 0.7).
+**Transport settings for stage 0.4:** the SDK default `MaxIdleConnsPerHost` is 10, which would force repeated TLS handshakes. Set `MaxConnsPerHost` to 0, and both `MaxIdleConns` and `MaxIdleConnsPerHost` to `MaxActivePartsLimit`. Set read and write buffers to 64 KiB. Set each connection's socket send buffer to `s3x.SendBufferSize` (4 MiB). Windows gives a Go socket 64 KiB, which limited each real S3 upload connection to about 2.7 MiB/s at a 29 ms round trip (stage 0.7). `s3x.SendBufferSize` is defined from `engine.DefaultSendBuffer`, the default of `Config.SendBuffer`, because the watchdog allows time for that much to drain (section 9).
 
 ## 8. Download path
 
@@ -358,11 +361,27 @@ One goroutine scans registered attempts every `WatchdogTick` (1 s). For each att
 
 | Phase | Set when | Limit |
 |---|---|---|
-| `AttemptAwaitResponse` | Attempt starts, or the upload body reached EOF | `Timeouts.Response` (60 s) |
+| `AttemptAwaitResponse` | Attempt starts, or the upload body reached EOF | `Timeouts.Response` (60 s) plus the drain allowance |
 | `AttemptSend` | First body read | `Timeouts.Stall` (30 s) |
 | `AttemptReceive` | Response headers arrived | `Timeouts.Stall` (30 s) |
 
 Control requests use `context.WithTimeout` with `Timeouts.Control` or `Timeouts.Complete` instead.
+
+**Drain allowance (stage 2.1).** When an upload body reaches EOF, up to `min(length, Config.SendBuffer)` bytes can still be in the socket. On a slow link they take longer than `Timeouts.Response` to leave (4 MiB at 70 KB/s is 60 s), and the attempt would be stopped as stalled on every try. So the body sets an allowance on its `AttemptActivity`, and the watchdog's await limit becomes `Response + allowance`:
+
+```
+allowance = min(length, SendBuffer) / rate      capped at MaxDrainAllowance (20 min), 0 when no rate is known
+rate      = the slower of:
+              own:    (length - SendBuffer) / (EOF time - first read)     only when length > 2 * SendBuffer
+              engine: per-connection estimate from earlier attempts
+```
+
+The own figure is a lower bound on the link: by EOF at least `length - SendBuffer` bytes have left the socket. A body of two buffers or less fills the socket at once and says nothing about the link, so it relies on the engine estimate, which the scheduler keeps in `observeUpload`:
+
+- A finished upload attempt of at least one buffer adds a sample, `length / (result time - dispatch time)`, averaged as `0.75 * old + 0.25 * sample`. The duration includes connecting and the server's latency, so the sample is below the link rate and the allowance it gives is generous.
+- An upload attempt the watchdog stopped after its whole body was read (at least `MeterQuantum`) sets the estimate to half of `min(estimate, length / duration)`. Each such stall doubles the next allowance, so a link of any speed is covered after a few retries, and a dead connection is still stopped within `Response + MaxDrainAllowance`.
+
+The clock is read twice per attempt (first read and EOF), never per `Read`.
 
 ### Bandwidth limiter
 
@@ -378,10 +397,25 @@ The progress goroutine ticks every `ProgressInterval` (200 ms), reads job counte
 2. Every running job on that profile receives `JobEvCredentialError`.
 3. In-flight attempts continue. Those that succeed are recorded as done, and those that fail with credential errors return to pending.
 4. Part tables, upload IDs, journal entries and open handles stay as they are. Nothing is aborted.
-5. The scheduler runs `CredentialProber.Probe` starting at `ProbeMin` (5 s), doubling to `ProbeMax` (60 s). `NotifyCredentialsChanged` runs a probe at once.
+5. The scheduler runs `CredentialProber.Probe` starting at `ProbeMin` (5 s), doubling to `ProbeMax` (60 s). `NotifyCredentialsChanged` runs a probe at once. Each probe is given the `ObjectRef` of the first job on that profile in `credential-wait`.
 6. When a probe passes, every waiting job on that profile receives `JobEvCredentialsRestored` and dispatch resumes at the first pending part.
 
 The wait has no time limit. The user can pause or cancel at any time. If a probe passes but requests still fail, the job re-enters the wait, and the probe interval keeps growing until a request succeeds.
+
+### The probe (stage 2.1)
+
+**Contract:** `Probe(ctx, ref ObjectRef) error`. It discards the profile's cached credentials, loads them again and proves them with one signed request for `ref`, so the proof uses the same region and bucket as the waiting job. Loading alone is not proof: a session-key profile whose session expired still loads from an unchanged file.
+
+**Production:** `s3x.Prober`, built by `creds.Manager.Prober(clients)`:
+
+1. `Manager.Refresh` invalidates the profile's cache and loads again: the vault, the AWS files, or the `credential_process` helper. A load failure is returned as `ErrCredentialsUnavailable`, and no request is sent.
+2. `s3x.ProbeAccess` sends `GetObject` of `ref` with `Range: bytes=0-0` and `SingleAttemptOptions`, and reads the body of at most one byte. S3 authenticates before it applies policy, so the probe passes on success and on any response whose code is permanent and present: `NoSuchKey`, `AccessDenied`, `InvalidRange` on an empty object. A credential code, no response, a broken body, a 5xx or throttle, or a code-less 400 or 403 fails, and the engine probes again later.
+
+**Notifications:** `creds.Manager.OnCredentialsChanged(fn)` is called after `AddKeys`, `UpdateKeys`, `Delete` and a successful `Reload`. The app connects it to `Engine.NotifyCredentialsChanged` and to `journal.Recovery.RecoverProfile`. `Reload` is `Refresh` plus the notification, for the user's "load credentials again" after a new sign-in. The prober calls `Refresh`, never `Reload`, because a notification starts a probe. Because every probe calls `Refresh`, a new sign-in is picked up within `ProbeMax` even if nobody calls `Reload`.
+
+**Session-key profiles** (temporary keys and a token in the shared AWS files, written by an external sign-in tool) have no automatic refresh. An expired session keeps every job on the profile in `credential-wait` until a new sign-in rewrites the file. The next probe, or `Reload`, then reads the new keys.
+
+**One credentials cache per profile.** Every S3 client the app builds for a profile (browsing, the engine's `ObjectStore`, the prober and launch cleanup) takes its credentials from `creds.Manager.Provider`, which is a single `aws.CredentialsCache` with a one-minute expiry window around the raw source. The SDK uses a provider that is already an `aws.CredentialsCache` as it is and adds no second cache, and `Manager` does not use the SDK config loader's cache for the supported kinds. `s3x.NewClients(manager.Provider)` builds and keeps one client per profile and region over one tuned HTTP client. `Refresh` therefore changes what every client signs with. The `s4engine` CLI still loads credentials through `config.LoadDefaultConfig` and keeps its double cache, which matters only for short-lived credentials on long CLI runs.
 
 ## 11. Journal
 
@@ -416,13 +450,29 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 
 `MatchesIntent` requires an exact key and an initiation time within `[CreatedAt-5 min, CreatedAt+1 h]`, so other clients' uploads are left alone.
 
-### Launch cleanup (`journal.Recoverer`, stage 2.1)
+### Launch cleanup (`journal.Recovery`, stage 2.1)
 
 1. Open the store and take the lock. Delete any `journal.json.tmp`.
-2. If `Decode` returns `ErrCorrupt`, move the file to the `journal.corrupt-` name, start empty and warn the user.
+2. If `Decode` returns `ErrCorrupt`, move the file to the `journal.corrupt-` name, start empty and warn the user (`FileStore.Warnings`).
 3. If it returns `ErrUnsupportedVersion`, leave the file alone and disable uploads until the user resolves it.
-4. Run cleanup in the background with at most 4 parallel requests. It does not block the UI or new jobs.
-5. On `ErrCredentials`, keep the entry and count it as deferred. Retry when `NotifyCredentialsChanged` fires for that profile and at each launch.
+4. Create `journal.NewRecovery` with the store and a `RemoteCleaner` (`s3x.NewCleaner`). Run `Recover` in the background, at most 4 entries in parallel. It does not block the UI or new jobs.
+5. On `ErrCredentials`, keep the entry and count it as deferred. `RecoverProfile` retries that profile's entries when its credentials change (`creds.Manager.OnCredentialsChanged`). Entries still present are retried at the next launch.
+
+**The launch set.** A `Recovery` owns only the entries the journal held when it was opened (`FileStore.Loaded`). It never touches an entry written later, because those belong to jobs of this session, whatever order the app creates things in.
+
+**Per entry:**
+
+| Entry | Action | Then |
+|---|---|---|
+| `download-temp` | Delete the file if `fsx.IsTempPath` accepts the name. A missing file is fine. A path that is not a temp name is never deleted: the entry is dropped with a warning | Delete the entry. A file that cannot be removed keeps the entry (deferred) |
+| `active` upload | `AbortUpload` by ID. `ErrUploadGone` (completed or already aborted) counts as done | Delete the entry |
+| `creating` upload | `ListUploads` for the key, then read the journal, then abort each listed upload that `MatchesIntent` accepts and no journal entry names | Delete the entry |
+
+A remote request that fails with anything but `ErrUploadGone` or `ErrCredentials` is tried up to 5 times, 500 ms apart and doubling up to 8 s. After that the entry is deferred with a warning that includes the error. `Report` counts uploads aborted, temp files removed and deferred entries.
+
+**Guarding intent matching.** A `creating` entry identifies its upload only by key and time, so a new upload of the same key within the hour also matches. If any entry outside the launch set names the same bucket and key, the launch entry is deferred and nothing is aborted. It is retried by the next `Recover` or `RecoverProfile`. A session's entry disappears only once its upload is complete or aborted (section 7), so the orphan is then found without risk. The order is what makes this safe: the journal is read after the listing, and a job makes its intent durable before it sends Create, so any upload of this session that appears in the listing already has its entry when the journal is read. An upload ID recorded in any entry is never aborted by intent matching.
+
+**What it cannot see:** an upload started by another client to the same key inside the window still matches, as before. A crash during a download of 64 MiB or less leaves its temp file, because small downloads are not journaled.
 
 ## 12. Test seams
 
@@ -433,7 +483,8 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 | `engine.Sink` | Temp file through `fsx.WriteStrategy` | Verifies the pattern, stores nothing |
 | `engine.Clock` | Real time | Fake clock |
 | `Config.Jitter` | `math/rand/v2` | Fixed value |
-| `engine.CredentialProber` | `internal/s3x` | Scripted results |
+| `engine.CredentialProber` | `s3x.Prober` from `creds.Manager.Prober` | Scripted results, or the production prober against the HTTPS fake with temporary AWS files |
+| `journal.RemoteCleaner` | `s3x.Cleaner` | `s3x.Cleaner` over HTTPS, `fakes3.Server.Cleaner`, or an in-memory fake in `internal/journal` |
 | `journal.Store` | File store | In-memory store, or a file store in `t.TempDir()` |
 
 **Simulated 2 TB run:** use the in-process fake with the synthetic source and sink, so no data touches disk or the network stack.
@@ -452,4 +503,4 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 | **0.4** | `engine.New` and `engine.Engine`: scheduler, attempts, metered body, watchdog, limiter, progress, upload path. `internal/s3x` `ObjectStore` and transport. File `Source`. `journal.Store` file implementation with the lock. Memory and goroutine-leak tests |
 | **0.5** | Download path in the engine. `fsx.WriteStrategy` implementations and `fsx.Finalizer` with `_windows.go` and portable variants. File `Sink`. Strategy comparison on a 300 GB file. Done: see `docs/progress.md` for the measured results and the default |
 | **0.6** | `cmd/s4engine` against `engine.Engine`, using the guard for every test run. Minimal Wails file-drop window |
-| **2.1** | `journal.Recoverer` and `journal.RemoteCleaner`. `engine.CredentialProber` in `internal/s3x`. Pause, resume and credential recovery hardened through the fault suite, including kill and relaunch |
+| **2.1** | `journal.Recovery` (the `Recoverer`) and `s3x.Cleaner`. `s3x.Prober`, and `creds.Manager.Prober`, `Reload` and `OnCredentialsChanged`. The drain allowance. `internal/faultsuite`: pause, resume, credential recovery and launch cleanup over HTTPS, including kill and relaunch. Done: see `docs/progress.md` |

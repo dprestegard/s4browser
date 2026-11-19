@@ -263,6 +263,9 @@ func TestExpiredCredentialsWaitAndResume(t *testing.T) {
 		t.Fatal("the upload must survive the credential wait")
 	}
 	h.waitFor(id, "several probes", func(engine.JobSnapshot) bool { return h.prober.calls.Load() >= 2 })
+	if ref := h.prober.last.Load(); ref == nil || *ref != testRef {
+		t.Fatalf("the probe must be signed for the waiting job's object: %+v", ref)
+	}
 
 	h.prober.failures.Store(0)
 	h.engine.NotifyCredentialsChanged(testRef.Profile)

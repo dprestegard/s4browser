@@ -56,12 +56,17 @@ func (s *scheduler) runProbe(p *probeState) {
 	if p.running || s.closing {
 		return
 	}
+	ref, ok := s.waitingRef(p.profile)
+	if !ok {
+		p.scheduled = false
+		return
+	}
 	p.running = true
 	p.scheduled = false
 	ctx, cancel := context.WithTimeout(s.baseCtx, s.cfg.Timeouts.Control)
 	s.spawn(func() func() {
 		defer cancel()
-		err := s.cfg.Prober.Probe(ctx, p.profile)
+		err := s.cfg.Prober.Probe(ctx, ref)
 		return func() {
 			p.running = false
 			s.onProbeDone(p, err)
@@ -87,12 +92,20 @@ func (s *scheduler) onProbeDone(p *probeState, err error) {
 }
 
 func (s *scheduler) anyWaiting(profile string) bool {
+	_, ok := s.waitingRef(profile)
+	return ok
+}
+
+// waitingRef returns the object of the first job waiting for profile's
+// credentials. The probe signs its request for that object, so it is checked
+// against the same region and bucket the job will use.
+func (s *scheduler) waitingRef(profile string) (ObjectRef, bool) {
 	for _, j := range s.slotted {
 		if j.spec.Ref.Profile == profile && j.state == JobCredentialWait {
-			return true
+			return j.spec.Ref, true
 		}
 	}
-	return false
+	return ObjectRef{}, false
 }
 
 // requestSucceeded ends the probe back-off for a profile.

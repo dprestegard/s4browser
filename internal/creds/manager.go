@@ -64,6 +64,10 @@ type Manager struct {
 	mu     sync.Mutex
 	state  stateFile
 	caches map[string]*aws.CredentialsCache
+
+	// listeners hear about credential changes. They are called without mu held.
+	listenMu  sync.Mutex
+	listeners []func(profileID string)
 }
 
 type stateFile struct {
@@ -215,6 +219,12 @@ func (m *Manager) AddKeys(name, accessKeyID, secretAccessKey, region string) (Pr
 		return Profile{}, err
 	}
 	region = strings.TrimSpace(region)
+	added := false
+	defer func() {
+		if added {
+			m.notify(AppID(name))
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Windows Credential Manager ignores case, so "Work" and "work" would share
@@ -233,6 +243,7 @@ func (m *Manager) AddKeys(name, accessKeyID, secretAccessKey, region string) (Pr
 		return Profile{}, err
 	}
 	m.invalidateLocked(AppID(name))
+	added = true
 	return Profile{
 		ID: AppID(name), Name: name, Source: SourceApp, Kind: KindVaultKeys,
 		Region: region, KeyHint: entry.KeyHint, Supported: true,
@@ -253,6 +264,12 @@ func (m *Manager) UpdateKeys(id, accessKeyID, secretAccessKey string) error {
 	if err != nil {
 		return err
 	}
+	changed := false
+	defer func() {
+		if changed {
+			m.notify(id)
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := m.findApp(name)
@@ -262,6 +279,7 @@ func (m *Manager) UpdateKeys(id, accessKeyID, secretAccessKey string) error {
 	if err := writeKeys(m.vault, name, accessKeyID, secretAccessKey); err != nil {
 		return err
 	}
+	changed = true
 	m.invalidateLocked(id)
 	next := m.state.clone()
 	next.Profiles[i].KeyHint = keyHint(accessKeyID)
@@ -279,6 +297,12 @@ func (m *Manager) Delete(id string) error {
 	if source != SourceApp {
 		return ErrReadOnlyProfile
 	}
+	removed := false
+	defer func() {
+		if removed {
+			m.notify(id)
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	i := m.findApp(name)
@@ -288,6 +312,7 @@ func (m *Manager) Delete(id string) error {
 	if err := m.vault.Delete(vaultUser(name)); err != nil && !errors.Is(err, ErrSecretNotFound) {
 		return fmt.Errorf("creds: remove keys from the credential vault: %w", err)
 	}
+	removed = true
 	m.invalidateLocked(id)
 	next := m.state.clone()
 	next.Profiles = slices.Delete(next.Profiles, i, i+1)
@@ -363,4 +388,51 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Status, error) {
 		st.Expires = &expires
 	}
 	return st, nil
+}
+
+// OnCredentialsChanged registers fn to hear that a profile's credentials may
+// have changed: after AddKeys, UpdateKeys, Delete and a successful Reload. The
+// app connects it to engine.NotifyCredentialsChanged and to
+// journal.Recovery.RecoverProfile, so jobs waiting for credentials and deferred
+// launch cleanup are retried at once. fn runs on the caller's goroutine, after
+// the change, without the Manager's lock.
+func (m *Manager) OnCredentialsChanged(fn func(profileID string)) {
+	m.listenMu.Lock()
+	defer m.listenMu.Unlock()
+	m.listeners = append(m.listeners, fn)
+}
+
+func (m *Manager) notify(id string) {
+	m.listenMu.Lock()
+	listeners := slices.Clone(m.listeners)
+	m.listenMu.Unlock()
+	for _, fn := range listeners {
+		fn(id)
+	}
+}
+
+// Reload is Refresh for the user: after a new sign-in, or when the user asks to
+// load credentials again. On success it notifies OnCredentialsChanged listeners.
+// The credential prober calls Refresh instead, because a notification starts a
+// probe and a probe must not start another.
+func (m *Manager) Reload(ctx context.Context, id string) (Status, error) {
+	st, err := m.Refresh(ctx, id)
+	if err != nil {
+		return Status{}, err
+	}
+	m.notify(id)
+	return st, nil
+}
+
+// Prober returns the production engine.CredentialProber for this Manager's
+// profiles. Each probe calls Refresh, so a new sign-in or a key change is picked
+// up even without a notification, and then proves the reloaded credentials with
+// one S3 request (s3x.ProbeAccess). clients must build its clients from
+// Provider, for example s3x.NewClients(m.Provider), so that the probe and the
+// transfers share one credentials cache per profile.
+func (m *Manager) Prober(clients s3x.ClientFunc) *s3x.Prober {
+	return s3x.NewProber(func(ctx context.Context, id string) error {
+		_, err := m.Refresh(ctx, id)
+		return err
+	}, clients)
 }

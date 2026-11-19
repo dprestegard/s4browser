@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -685,5 +686,62 @@ func TestUnknownProfileIDs(t *testing.T) {
 	}
 	if _, err := m.Refresh(context.Background(), AWSID("nosuch")); !errors.Is(err, engine.ErrCredentialsUnavailable) {
 		t.Fatalf("%v", err)
+	}
+}
+
+// TestCredentialChangesAreAnnounced: everything that changes keys tells the
+// listeners, so waiting transfers and deferred cleanup retry at once. Refresh,
+// which the credential prober calls, must not, or a probe would start a probe.
+func TestCredentialChangesAreAnnounced(t *testing.T) {
+	f := newFixture(t, "", "[temp]\naws_access_key_id = "+fakeAccess+"\naws_secret_access_key = "+fakeSecret+"\naws_session_token = tok1\n")
+	m := f.open(t)
+	var mu sync.Mutex
+	var heard []string
+	m.OnCredentialsChanged(func(id string) {
+		// The lock must be free, so a listener may call back into the Manager.
+		_ = m.List(context.Background())
+		mu.Lock()
+		heard = append(heard, id)
+		mu.Unlock()
+	})
+	got := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), heard...)
+	}
+	ctx := context.Background()
+
+	if _, err := m.Refresh(ctx, AWSID("temp")); err != nil {
+		t.Fatal(err)
+	}
+	if len(got()) != 0 {
+		t.Fatalf("Refresh announced a change: %v", got())
+	}
+	if _, err := m.Reload(ctx, AWSID("temp")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Reload(ctx, AWSID("missing")); err == nil {
+		t.Fatal("reloading a missing profile succeeded")
+	}
+	if _, err := m.AddKeys("work", fakeAccess, fakeSecret, "us-east-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.AddKeys("work", fakeAccess, fakeSecret, "us-east-1"); err == nil {
+		t.Fatal("a duplicate profile was added")
+	}
+	if err := m.UpdateKeys(AppID("work"), fakeAccess2, fakeSecret2); err != nil {
+		t.Fatal(err)
+	}
+	f.vault.setErr = errors.New("vault is locked")
+	if err := m.UpdateKeys(AppID("work"), fakeAccess, fakeSecret); err == nil {
+		t.Fatal("a failed vault write succeeded")
+	}
+	f.vault.setErr = nil
+	if err := m.Delete(AppID("work")); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{AWSID("temp"), AppID("work"), AppID("work"), AppID("work")}
+	if !slices.Equal(got(), want) {
+		t.Fatalf("heard %v, want %v", got(), want)
 	}
 }

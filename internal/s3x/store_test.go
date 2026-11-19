@@ -61,7 +61,7 @@ func newStore(server *fakes3.Server) *s3x.Store {
 
 type passProber struct{}
 
-func (passProber) Probe(context.Context, string) error { return nil }
+func (passProber) Probe(context.Context, engine.ObjectRef) error { return nil }
 
 type rig struct {
 	t       *testing.T
