@@ -538,7 +538,7 @@ Stage 0.7 (the real AWS gate, Opus) starts from this commit. It needs the profil
 
 ## Stage 0.7: real AWS gate
 
-**Status:** done. **Recommendation: GO.** Every gate check passed on commit `81fe26b` after one defect was fixed. The decision belongs to the user, and stage 1.1 has not been started.
+**Status:** done. **Decision: GO**, given by the user. Every gate check passed on commit `81fe26b` after one defect was fixed.
 
 The test used one versioned bucket (`<BUCKET>`, us-west-2), only under `s4browser-test/gate-20261118/`. Default encryption is SSE-KMS. Nothing outside the prefix was listed, read, written or deleted.
 
@@ -628,4 +628,4 @@ The user ran the manual drop test from stage 0.6 and reported that it passed. It
 
 ### Next
 
-The user decides go or no-go. Stage 1.1 starts only after a GO.
+**Decision: GO**, given by the user on 2026-11-18. Stage 1.1 (profiles, vault storage and `credential_process`) may start from this commit in a new session. It is not started here.
