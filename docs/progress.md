@@ -535,3 +535,97 @@ If step 3 shows nothing: Wails delivers paths through WebView2's `postMessageWit
 ### Next
 
 Stage 0.7 (the real AWS gate, Opus) starts from this commit. It needs the profile, bucket and region, a measured speed-test result, and a decision on whether the bucket has versioning. It is not started here.
+
+## Stage 0.7: real AWS gate
+
+**Status:** done. **Recommendation: GO.** Every gate check passed on commit `81fe26b` after one defect was fixed. The decision belongs to the user, and stage 1.1 has not been started.
+
+The test used one versioned bucket (`<BUCKET>`, us-west-2), only under `s4browser-test/gate-20261118/`. Default encryption is SSE-KMS. Nothing outside the prefix was listed, read, written or deleted.
+
+### Gate results
+
+The pass mark, set by the user, is a steady state of 200 MB/s (1.6 Gbps) in each direction. This is 80% of a 2 Gbps floor, because no measured line rate was supplied.
+
+| Check | Upload | Download | Result |
+|---|---|---|---|
+| Steady state, after the first 10 s | **279.5 MB/s (2.24 Gbps)** | **251.3 MB/s (2.01 Gbps)** | Pass |
+| Whole run | 2.30 Gbps in 34.8 s | 2.05 Gbps in 39.0 s | |
+| Slowest 10 s window (the last 10 s of each run) | 218.5 MB/s | 171.0 MB/s | See limits |
+| Peak Go heap, limit `MemoryBound` = 55.2 MB | 9.5 MB | 32.4 MB | Pass |
+| Peak working set | 37.7 MB | 59.4 MB | |
+| Retries | 0 | 0 | Pass |
+| SHA-256 of the download equals the source | | Match | Pass |
+| Multipart uploads left after a normal run | 0 | | Pass |
+| Multipart uploads left after Ctrl+C (exit 130, `cancelled`) | 0 | | Pass |
+| Write guard refuses a key outside the prefix and a `..` key, exit 2, before any write | Refused | | Pass |
+
+Settings were the engine defaults: 16 parts per file, 32 parts in total, 64 MiB parts, `sparse` write strategy. The local files were on a WD_BLACK SN850X over 10 GbE.
+
+### All real transfers
+
+The limit was 4 uploads and 4 downloads. Four uploads and two downloads were used.
+
+| Run | Commit | Settings | Result |
+|---|---|---|---|
+| Upload 1 | `deb8be1` | Defaults | Completed, 42.6 MB/s steady (0.34 Gbps) |
+| Download 1 | `deb8be1` | Defaults | Completed, 259.3 MB/s steady (2.07 Gbps), hash match |
+| Upload 2 | `deb8be1` | 64 parts per file, 64 in total | About 183 MB/s live (1.46 Gbps), Ctrl+C at 45 s, 0 uploads left |
+| Upload 3 | `81fe26b` | Defaults | Completed, the gate run above |
+| Download 2 | `81fe26b` | Defaults | Completed, the gate run above |
+| Upload 4 | `81fe26b` | Defaults | Ctrl+C at 15 s, 0 uploads left |
+
+### The defect and the fix
+
+The first upload ran at 0.34 Gbps. Evidence for the cause:
+
+- The rate was flat, and it fell as the last connections finished, so the remaining connections did not speed up.
+- Four times the connections gave 4.1 times the throughput: about 2.7 MiB/s per connection at both 16 and 64.
+- At the measured 29 ms round trip, 2.7 MiB/s is about 80 KB in flight per connection.
+- A Go socket on this machine reports a 64 KiB `SO_SNDBUF`.
+
+**Fix:** `s3x.TuneTransport` now sets each connection's send buffer to `s3x.SendBufferSize` (4 MiB). With no other change, the same default settings went from 42.6 MB/s to 279.5 MB/s. Raising concurrency alone would have needed about 70 connections to reach the pass mark, so no concurrency setting was changed. Tests: `TestTunedTransportSetsSendBuffer` (through the fake S3), `TestTuneTransportDialsWithoutABaseDialer`, and `TestSendBufferReachesTheSocket` (reads the value back from Windows).
+
+### Open risks from earlier stages
+
+| Item | Result | Evidence |
+|---|---|---|
+| Trailing CRC32 on parts | **Pass** | All 150 parts accepted. S3's CRC of part 1 equals one computed separately from the local file |
+| Composite checksum | **Pass** | `HeadObject` returns `<base64>-150` with type `COMPOSITE`, equal to a separately computed value. `GetObjectAttributes` returns the same value **without** the `-150` suffix |
+| `MpuObjectSize` | **Pass** | Complete accepted the correct size. A wrong size was not tried |
+| Ranged GET `Content-Range` | **Pass** | Format `bytes a-b/total`, enforced by the adapter on every part of both downloads |
+| `If-Match` with a multipart ETag | **Pass** | Sent on every part. A wrong ETag returns 412 `PreconditionFailed` |
+| One-byte diagnostic GET | **Partly tested** | The request works: 206, `bytes 0-0/<size>`, correct byte. The path that follows a real HEAD 400, 401 or 403 was **not tested**, because no such error occurred |
+| Upload and download under SSE-KMS | **Pass** | Objects report `aws:kms`. No KMS error or throttling |
+| Error codes observed | **Pass for these** | 412 `PreconditionFailed`, 416 `InvalidRange`, GET 404 `NoSuchKey`, HEAD 404 with no error code |
+| Other error codes | **Not tested** | `ExpiredToken`, `AccessDenied`, `SlowDown`, `BadDigest`, `InvalidPart`, `InvalidRequest` |
+| Credential expiry during a transfer | **Not tested** | Not attempted, because it cannot be forced safely with this profile |
+| Long parks on real connections | **Not tested** | `sparse` does not park |
+
+**Credential type:** the test profile uses neither long-lived static keys nor `credential_process`. It holds temporary session keys with a session token in the shared credentials file, written by an external sign-in tool. They worked here, but **stage 1.1 should treat this as a third credential type**. It has no automatic refresh, so an expired session needs a new sign-in and `NotifyCredentialsChanged`.
+
+### Manual Explorer drop test
+
+The user ran the manual drop test from stage 0.6 and reported that it passed. It was not repeated in this stage.
+
+### Limits of this evidence
+
+- **The runs were short.** Each 10 GB run lasted 35 to 39 s, with one gate run per direction. They do not prove multi-hour throughput.
+- **The slowest download window was below the pass mark.** The final 10 s averaged 171 MB/s, because connections finish and the rate falls at the end of a run. The steady-state figure includes this window and still passed.
+- **The line rate is unknown.** Rates levelled off near 2.56 Gbps up and 2.35 Gbps down, which may be the path's limit, but no independent speed test was run.
+- **The disk was barely tested.** 10 GB fits in this machine's RAM cache, so a long download can be slower, as stage 0.5 measured on another drive.
+- **`steadyStateBytesPerSec` is too low for a cancelled run,** because cancelled parts are rolled back. Upload 2 reported 93 MB/s against about 183 MB/s live. Use it only for completed runs.
+
+### New risks
+
+- **Slow links could cause false stalls.** After the last body read, up to 4 MiB can still be in the socket, and `Timeouts.Response` allows 60 s for it to drain and for S3 to answer. A connection slower than about 70 KB/s would time out, which is about 18 Mbit/s across 32 connections. Stage 2.1 should cover this, for example by scaling the buffer or the timeout.
+- **Kernel memory is outside `MemoryBound`.** Send buffers can hold up to 4 MiB per connection: 128 MiB at the default 32 connections.
+- **Upload progress runs slightly ahead** of the network by the data held in send buffers.
+
+### Left behind
+
+- **In the bucket:** no current objects and no multipart uploads remain under the prefix. Two noncurrent 10 GB versions and their delete markers remain. The user chose to let the lifecycle rule remove noncurrent versions after 15 days.
+- **On this machine:** all test files were deleted, but the empty directories `C:\s4gate\`, `down1` and `down2` remain, because the tool refused to remove a top-level directory on C:.
+
+### Next
+
+The user decides go or no-go. Stage 1.1 starts only after a GO.
