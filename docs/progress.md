@@ -786,3 +786,58 @@ In this mode browsing uses an in-process fake S3 with fake keys, whatever profil
 ### Next
 
 Stage 1.3 (app shell and visual design system, Opus) starts from this commit and needs your approval of the design. It is not started here.
+
+## Stage 1.3: app shell and visual design system
+
+**Status:** done. **The design was approved by the user on 2026-11-18** from the design canvas (main window, states, tokens and components). `wails build`, `go test -race -count=1 ./...`, `go test -count=1 ./...`, `go vet ./...`, `staticcheck ./...` (also with `-tags devfake`) and `tsc` pass. No AWS calls were made and `~/.aws` was not read: the hands-on run used temporary AWS files with fake values and the devfake S3.
+
+### The design ("Graphite")
+
+- **Neutral greys, one blue accent.** Greys carry no tint, so the UI does not colour the eye during colour-critical media work. Blue marks selection, focus, progress and the single primary action. Amber is waiting or retrying, red is failed or delete, green is done. Every state also has a label, so colour is never the only signal.
+- **Dark by default, light and "Match Windows" available.** The native title bar follows the theme through `WindowSetDarkTheme` and the related calls.
+- **Windows system type.** Segoe UI Variable at 13/18 px with tabular figures; Cascadia Mono for keys, ETags and paths. No fonts are bundled (the template's Nunito is gone).
+- **Dense rows for a mouse.** 28 px rows by default, 34 px "comfortable". This is below the 44 px touch-target guideline on purpose: the app is mouse-driven.
+- **Layout:** top bar 44 px (profile switcher, view settings, details toggle), bucket sidebar 232 px (resizable 180 to 360), listing, details panel 300 px (260 below 1,280 px wide, can be hidden), and a full-width transfer dock (resizable, collapses to its tabs). Native Windows title bar. Window opens at 1280 × 800, minimum 1024 × 640.
+- Contrast: the lowest-contrast text token (`--text3`) passes 4.5:1 on the surfaces it is used on, in both themes.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Tokens (every colour, type size, spacing, radius and size) | `frontend/src/styles/tokens.css` |
+| Base elements and shared components: buttons, chips, progress bars, fields, banners, dialogs, menus | `frontend/src/styles/base.css` |
+| Shell layout | `frontend/src/styles/shell.css` |
+| Shell | `frontend/src/App.tsx`, `frontend/src/shell/` (`TopBar`, `Sidebar`, `Browser`, `Details`, `TransferDock`, `useProfiles`) |
+| Icon set, dialog and menu helpers, splitter, formats | `frontend/src/ui/` |
+| Theme, density and layout preferences (`localStorage`, `s4:` keys) | `frontend/src/settings.ts` |
+| Window options | `main.go` |
+
+The stage 1.1 and 1.2 working panels (`Profiles.tsx`, `Browse.tsx`) and the drop spike page are gone; everything they did is in the shell. The Go side is unchanged apart from `main.go`.
+
+### Behaviour worth knowing
+
+- **Profiles:** the top bar shows the active profile, its kind and when its session expires. Credentials are loaded (`CheckProfile`, no AWS request) whenever the active profile changes; "Load credentials again" repeats it after a new sign-in. Adding keys and deleting an app profile are in the profile menu; delete asks first.
+- **Buckets:** reload, add by name (dialog), forget an added bucket (hover), and a "not allowed to list buckets" state.
+- **Listing:** breadcrumb, back history, up (also Backspace and Alt+Up), reload, sortable headers with `aria-sort`, click, Ctrl-click and Shift-click selection, arrow keys, Enter or double-click opens a folder. Rows are still fetched 200 at a time with a pager: **stage 1.4 replaces the pager with the virtualized table** and should keep the row markup, classes and keyboard behaviour.
+- **Details** shows what the listing knows: one object, a multi-selection total, or the current folder. Encryption, checksum, ETag, tags and presigned links need extra requests and belong to stage 3.1, which should add them to this panel as the canvas shows.
+- **Not built yet, shown disabled with a tooltip naming the stage:** New folder and Delete (3.1), Upload, Download, Pause all and transfer settings (2.4).
+- **Drag-in:** the listing is now the Wails drop target (`OnFileDrop(..., true)` and `--wails-drop-target: drop`). While files are over it, the drop overlay names the destination. Dropped paths are still logged by Go to `%AppData%\s4browser\filedrop.log` and listed in the dock as "Dropped, not uploaded" until stage 2.4.
+
+### Evidence
+
+Hands-on, `wails dev -tags devfake` driven through the dev server page with fake AWS files:
+
+- `dev-media/big/` (100,000 objects, 40 folders) loaded in 1.1 to 1.3 s. Size descending kept folders first in natural order. A Shift-click range selected 3 objects, and the details panel and status bar showed their total.
+- At 1440 × 900 and at the 1024 × 640 minimum there is no page scroll. At the minimum, toolbar labels collapse to icons and secondary status text is hidden, so the pager still fits.
+- Light and dark themes, the profile menu, and the add-bucket dialog (focus moves into it, Escape closes) were checked.
+- The dev server page logs `Cannot read properties of null (reading 'nodes')` from Wails' own `/wails/ipc.js`. It comes from the browser-mode bridge script, not app code.
+
+### Not verified
+
+- **The built exe was not looked at.** Only the dev server page in a browser was checked, so the native title bar theme switching, the window's minimum size and the WebView2 drop overlay are unverified in the real window.
+- **A real Explorer drop on the new drop target was not tried.** It needs a hand drag (as in stage 0.6). The change from a whole-window drop to the listing as target is the part to check.
+- No automated frontend tests exist. The plan has none for the UI; stage 1.4 may add some for the virtualized table.
+
+### Next
+
+Stage 1.4 (virtualized browser table and navigation) starts from this commit. It is not started here.

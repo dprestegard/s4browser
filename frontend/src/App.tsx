@@ -1,64 +1,91 @@
-import {useEffect, useState} from 'react';
-import './App.css';
-import {Info} from '../wailsjs/go/main/App';
+import {useCallback, useEffect, useState} from 'react';
 import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
-import {Profiles} from './Profiles';
-import {Browse} from './Browse';
+import {Density, ThemeSetting, useAppliedTheme, useSetting} from './settings';
+import {useProfiles} from './shell/useProfiles';
+import {TopBar} from './shell/TopBar';
+import {Sidebar} from './shell/Sidebar';
+import {Browser} from './shell/Browser';
+import {Details} from './shell/Details';
+import {TransferDock} from './shell/TransferDock';
+import {Splitter} from './ui/Splitter';
+import {Drop, Location, Row, Snapshot} from './types';
 
-// Stage 0.6 spike. Throwaway: it proves that dropping files and folders gives
-// absolute paths in Go. It shows path strings and kinds only. File data never
-// reaches this page, and Go classifies each path.
+// The app shell approved in stage 1.3: top bar, bucket sidebar, listing,
+// details panel and the transfer dock.
+export default function App() {
+    const [theme, setTheme] = useSetting<ThemeSetting>('theme', 'dark');
+    const [density, setDensity] = useSetting<Density>('density', 'compact');
+    const [detailsOpen, setDetailsOpen] = useSetting('detailsOpen', true);
+    const [sidebarWidth, setSidebarWidth] = useSetting('sidebarWidth', 232);
+    const [dockOpen, setDockOpen] = useSetting('dockOpen', true);
+    const [dockHeight, setDockHeight] = useSetting('dockHeight', 200);
+    useAppliedTheme(theme, density);
 
-type Item = {path: string; kind: string; absolute: boolean; error?: string};
-type Drop = {at: string; x: number; y: number; items: Item[]; logError?: string};
+    const profiles = useProfiles();
+    const profileId = profiles.state.activeId;
 
-function App() {
+    const [location, setLocation] = useState<Location | null>(null);
+    const [history, setHistory] = useState<Location[]>([]);
+    const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+    const [selected, setSelected] = useState<Row[]>([]);
     const [drops, setDrops] = useState<Drop[]>([]);
-    const [logPath, setLogPath] = useState('');
-    const [logError, setLogError] = useState('');
-    const [profile, setProfile] = useState('');
 
+    // A new profile starts with nothing open.
     useEffect(() => {
-        Info().then((info) => {
-            setLogPath(info.logPath);
-            setLogError(info.logError ?? '');
+        setLocation(null);
+        setHistory([]);
+        setSelected([]);
+    }, [profileId]);
+
+    const go = useCallback((next: Location) => {
+        if (location && location.bucket === next.bucket && location.prefix === next.prefix) return;
+        if (location) setHistory((h) => [...h.slice(-99), location]);
+        setLocation(next);
+        setSelected([]);
+    }, [location]);
+
+    const back = () => {
+        const prev = history[history.length - 1];
+        if (!prev) return;
+        setHistory(history.slice(0, -1));
+        setLocation(prev);
+        setSelected([]);
+    };
+
+    // Dropped files arrive in Go as absolute paths; Go logs them and sends the
+    // paths (never file data) as "s4:drop". The drop target is the listing.
+    useEffect(() => {
+        OnFileDrop(() => {}, true);
+        return EventsOn('s4:drop', (d: Drop) => {
+            setDrops((old) => [d, ...old].slice(0, 50));
+            setDockOpen(true);
         });
-        // Installs the window's drag listeners. The paths are resolved and logged
-        // in Go, which then sends the result as the "s4:drop" event below.
-        OnFileDrop(() => {}, false);
-        return EventsOn('s4:drop', (drop: Drop) => setDrops((old) => [drop, ...old]));
-    }, []);
+    }, [setDockOpen]);
+
+    // Keep the dock from taking the whole window when the window shrinks.
+    const maxDock = Math.max(140, Math.round(window.innerHeight * 0.5));
 
     return (
-        <div id="App">
-            <Profiles onActive={setProfile}/>
-            <Browse profile={profile}/>
-            <h1>File-drop spike</h1>
-            <p>Drop files, folders or both anywhere in this window.</p>
-            <p className="meta">
-                {logError ? `Log file unavailable: ${logError}` : `Log file: ${logPath}`}
-            </p>
-            {drops.length === 0 && <p className="meta">Nothing dropped yet.</p>}
-            {drops.map((drop, i) => (
-                <section key={drops.length - i} className="drop">
-                    <div className="meta">
-                        {new Date(drop.at).toLocaleTimeString()}: {drop.items.length} item(s)
-                        {drop.logError ? ` (log write failed: ${drop.logError})` : ''}
-                    </div>
-                    <ul>
-                        {drop.items.map((item, j) => (
-                            <li key={j}>
-                                <span className={`kind kind-${item.kind}`}>{item.kind}</span>{' '}
-                                <code>{item.path}</code>
-                                {item.absolute ? '' : ' (NOT ABSOLUTE)'}
-                                {item.error ? ` (${item.error})` : ''}
-                            </li>
-                        ))}
-                    </ul>
-                </section>
-            ))}
+        <div className="app">
+            <TopBar profiles={profiles} theme={theme} setTheme={setTheme} density={density} setDensity={setDensity}
+                    detailsOpen={detailsOpen} toggleDetails={() => setDetailsOpen(!detailsOpen)}/>
+            <div className="workspace">
+                <Sidebar profileId={profileId} current={location?.bucket ?? ''} width={sidebarWidth}
+                         onOpen={(b) => go({bucket: b.name, prefix: '', region: b.region})}/>
+                <Splitter dir="v" value={sidebarWidth} min={180} max={360} onChange={setSidebarWidth} label="Resize bucket list"/>
+                <Browser profileId={profileId} location={location}
+                         onNavigate={(prefix) => location && go({...location, prefix})}
+                         canGoBack={history.length > 0} onBack={back}
+                         onSnapshot={setSnapshot} selected={selected} onSelect={setSelected}/>
+                {detailsOpen && <Details location={location} snapshot={snapshot} selected={selected}/>}
+            </div>
+            <div style={{display: 'flex', flexDirection: 'column', minHeight: 0}}>
+                {dockOpen && (
+                    <Splitter dir="h" value={dockHeight} min={120} max={maxDock} sign={-1} onChange={setDockHeight} label="Resize transfers"/>
+                )}
+                <TransferDock open={dockOpen} onToggle={() => setDockOpen(!dockOpen)} height={Math.min(dockHeight, maxDock)}
+                              drops={drops} onClearDrops={() => setDrops([])}/>
+            </div>
         </div>
     );
 }
-
-export default App

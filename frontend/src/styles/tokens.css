@@ -1,0 +1,92 @@
+/*
+ * s4browser design tokens ("Graphite"), approved in stage 1.3.
+ * Every colour in the app comes from these variables. The theme is chosen by
+ * data-theme on <html> (see settings.ts). Contrast figures are for text on the
+ * surface it normally sits on: --text3 is the lowest and still passes 4.5:1.
+ */
+
+:root {
+    /* Type */
+    --font-ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+    --fs-title: 17px;   --lh-title: 22px;   /* dialog titles */
+    --fs-heading: 15px; --lh-heading: 20px; /* panel headings */
+    --fs-body: 13px;    --lh-body: 18px;    /* default, table rows */
+    --fs-small: 12px;   --lh-small: 17px;   /* meta, secondary */
+    --fs-label: 11px;   --lh-label: 16px;   /* caps labels, chips */
+    --fs-mono: 12px;
+
+    /* Space: 4 px grid */
+    --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px; --sp-8: 32px;
+
+    /* Shape */
+    --r-chip: 3px; --r-control: 4px; --r-panel: 6px; --r-dialog: 8px;
+
+    /* Sizes */
+    --topbar-h: 44px;
+    --control-h: 28px;
+    --control-h-small: 24px;
+    --input-h: 32px;
+    --row-h: 28px;
+    --queue-row-h: 44px;
+    --sidebar-w: 232px;
+    --details-w: 300px;
+}
+
+:root[data-density="comfortable"] {
+    --row-h: 34px;
+}
+
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg0: #0F1012;  /* window, top bar */
+    --bg1: #16171A;  /* sidebar, details, queue */
+    --bg2: #1B1C20;  /* listing, dialogs, inputs */
+    --bg3: #24262B;  /* hover, buttons */
+    --bg4: #2D3036;  /* button hover */
+    --line: #2A2C31;
+    --line2: #3A3D44;
+    --text: #E8E9EC;
+    --text2: #B0B4BC;
+    --text3: #8E939D;
+    --accent: #4D9BFF;
+    --accent-ink: #06172E;
+    --accent-weak: rgba(77, 155, 255, .16);
+    --ok: #3FBF86;
+    --ok-weak: rgba(63, 191, 134, .14);
+    --warn: #E8A93A;
+    --warn-weak: rgba(232, 169, 58, .14);
+    --danger: #F0645A;
+    --danger-ink: #2A0A07;
+    --danger-weak: rgba(240, 100, 90, .14);
+    --track: #2A2C31;
+    --scrim: rgba(0, 0, 0, .55);
+    --shadow: 0 12px 32px rgba(0, 0, 0, .5);
+}
+
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg0: #E9EBEE;
+    --bg1: #F4F5F7;
+    --bg2: #FFFFFF;
+    --bg3: #EEF0F3;
+    --bg4: #E2E5E9;
+    --line: #E3E6EA;
+    --line2: #C9CED5;
+    --text: #15171B;
+    --text2: #454B55;
+    --text3: #5F6570;
+    --accent: #1F6FE0;
+    --accent-ink: #FFFFFF;
+    --accent-weak: rgba(31, 111, 224, .10);
+    --ok: #1B8455;
+    --ok-weak: rgba(27, 132, 85, .10);
+    --warn: #9A6200;
+    --warn-weak: rgba(176, 112, 0, .12);
+    --danger: #C2352C;
+    --danger-ink: #FFFFFF;
+    --danger-weak: rgba(194, 53, 44, .10);
+    --track: #E1E4E8;
+    --scrim: rgba(20, 24, 32, .32);
+    --shadow: 0 12px 32px rgba(20, 24, 32, .18);
+}

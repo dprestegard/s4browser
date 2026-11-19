@@ -1,11 +1,14 @@
 import React from 'react'
 import {createRoot} from 'react-dom/client'
-import './style.css'
+import './styles/tokens.css'
+import './styles/base.css'
+import './styles/shell.css'
+import {applyInitialTheme} from './settings'
 import App from './App'
 
-const container = document.getElementById('root')
+applyInitialTheme()
 
-const root = createRoot(container!)
+const root = createRoot(document.getElementById('root')!)
 
 root.render(
     <React.StrictMode>
