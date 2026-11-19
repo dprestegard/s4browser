@@ -1,6 +1,8 @@
 package s3x
 
 import (
+	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -13,6 +15,15 @@ import (
 const (
 	transportBufferSize   = 64 * 1024
 	expectContinueTimeout = time.Second
+
+	// SendBufferSize is the socket send buffer of every S3 connection. Windows
+	// gives a Go socket 64 KiB, which caps a connection at about 64 KiB per round
+	// trip: 2.7 MiB/s at the 29 ms measured to S3 in stage 0.7. 4 MiB allows about
+	// 140 MiB/s per connection at that latency.
+	SendBufferSize = 4 * 1024 * 1024
+
+	dialTimeout   = 30 * time.Second
+	dialKeepAlive = 30 * time.Second
 )
 
 // TuneTransport applies the settings large transfers need. The SDK's default of
@@ -26,6 +37,25 @@ func TuneTransport(t *http.Transport) {
 	t.ExpectContinueTimeout = expectContinueTimeout
 	t.ReadBufferSize = transportBufferSize
 	t.WriteBufferSize = transportBufferSize
+	t.DialContext = withSendBuffer(t.DialContext)
+}
+
+// withSendBuffer wraps dial so each new connection gets SendBufferSize. The
+// buffer is only a performance setting, so a socket that refuses it still works.
+func withSendBuffer(dial func(ctx context.Context, network, addr string) (net.Conn, error)) func(ctx context.Context, network, addr string) (net.Conn, error) {
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: dialTimeout, KeepAlive: dialKeepAlive}).DialContext
+	}
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		conn, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		if buffered, ok := conn.(interface{ SetWriteBuffer(int) error }); ok {
+			_ = buffered.SetWriteBuffer(SendBufferSize)
+		}
+		return conn, nil
+	}
 }
 
 // NewHTTPClient returns the SDK HTTP client with the tuned transport. Stall

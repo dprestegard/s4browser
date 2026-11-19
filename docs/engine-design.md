@@ -286,7 +286,7 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 | `Expect: 100-continue` | Added for bodies over 2 MiB | Keep the transport's 1 s `ExpectContinueTimeout`. A zero value sends the body without waiting |
 | Error inside a 200 | Complete and UploadPart surface these as API errors | Classified by code, already covered |
 
-**Transport settings for stage 0.4:** the SDK default `MaxIdleConnsPerHost` is 10, which would force repeated TLS handshakes. Set `MaxConnsPerHost` to 0, and both `MaxIdleConns` and `MaxIdleConnsPerHost` to `MaxActivePartsLimit`. Set read and write buffers to 64 KiB.
+**Transport settings for stage 0.4:** the SDK default `MaxIdleConnsPerHost` is 10, which would force repeated TLS handshakes. Set `MaxConnsPerHost` to 0, and both `MaxIdleConns` and `MaxIdleConnsPerHost` to `MaxActivePartsLimit`. Set read and write buffers to 64 KiB. Set each connection's socket send buffer to `s3x.SendBufferSize` (4 MiB). Windows gives a Go socket 64 KiB, which limited each real S3 upload connection to about 2.7 MiB/s at a 29 ms round trip (stage 0.7).
 
 ## 8. Download path
 
