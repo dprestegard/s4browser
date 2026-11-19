@@ -14,8 +14,20 @@ export function Buckets(arg1) {
   return window['go']['main']['App']['Buckets'](arg1);
 }
 
+export function CancelAll() {
+  return window['go']['main']['App']['CancelAll']();
+}
+
+export function CancelJob(arg1) {
+  return window['go']['main']['App']['CancelJob'](arg1);
+}
+
 export function CheckProfile(arg1) {
   return window['go']['main']['App']['CheckProfile'](arg1);
+}
+
+export function ClearFinished(arg1) {
+  return window['go']['main']['App']['ClearFinished'](arg1);
 }
 
 export function CloseListing(arg1) {
@@ -42,14 +54,62 @@ export function OpenListing(arg1, arg2, arg3) {
   return window['go']['main']['App']['OpenListing'](arg1, arg2, arg3);
 }
 
+export function PauseAll() {
+  return window['go']['main']['App']['PauseAll']();
+}
+
+export function PauseJob(arg1) {
+  return window['go']['main']['App']['PauseJob'](arg1);
+}
+
 export function Profiles() {
   return window['go']['main']['App']['Profiles']();
+}
+
+export function QueueDownloads(arg1) {
+  return window['go']['main']['App']['QueueDownloads'](arg1);
+}
+
+export function QueueJobs() {
+  return window['go']['main']['App']['QueueJobs']();
+}
+
+export function QueueUploads(arg1) {
+  return window['go']['main']['App']['QueueUploads'](arg1);
 }
 
 export function RemoveBucket(arg1, arg2) {
   return window['go']['main']['App']['RemoveBucket'](arg1, arg2);
 }
 
+export function RemoveJob(arg1) {
+  return window['go']['main']['App']['RemoveJob'](arg1);
+}
+
+export function ResumeAll() {
+  return window['go']['main']['App']['ResumeAll']();
+}
+
+export function ResumeJob(arg1) {
+  return window['go']['main']['App']['ResumeJob'](arg1);
+}
+
+export function RetryJob(arg1) {
+  return window['go']['main']['App']['RetryJob'](arg1);
+}
+
 export function SelectProfile(arg1) {
   return window['go']['main']['App']['SelectProfile'](arg1);
+}
+
+export function SetTransferSettings(arg1) {
+  return window['go']['main']['App']['SetTransferSettings'](arg1);
+}
+
+export function TransferSettings() {
+  return window['go']['main']['App']['TransferSettings']();
+}
+
+export function TransferStatus() {
+  return window['go']['main']['App']['TransferStatus']();
 }

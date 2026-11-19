@@ -962,3 +962,89 @@ All against the HTTPS fake through `s3x.Store`, `s3x.TuneTransport` and the file
 ### Next
 
 Stage 2.2 (queue service and Wails bindings) starts from this commit. It is not started here.
+
+## Stage 2.2: queue service and Wails bindings
+
+**Status:** done, not committed (waiting for the user's go-ahead). `wails build`, `go test -race -count=1 ./...`, `go vet ./...`, `staticcheck ./...` (also with `-tags devfake` for vet and staticcheck) and `GOOS=darwin go vet` (engine, journal, fsx, s3x, fakes3, creds, queue, `cmd/...`) pass. One full non-race `go test ./...` failed only in `internal/browse` (`TestHundredThousandObjects`, 889 ms against its 500 ms limit while all packages ran at once, the stage 2.1 flake); it passes alone. No AWS calls were made and `~/.aws` was not read: tests use temporary AWS files with fake keys and the HTTPS fake S3, and never touch `%AppData%\s4browser`. No engine contract changed.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Queue service: opens journal, recovery, engine; status; shutdown | `internal/queue/queue.go` |
+| Job view model, `s4:queue` event, error text | `internal/queue/view.go` |
+| Pause, resume, cancel, retry, remove, all-variants, clear | `internal/queue/commands.go` |
+| Upload and download requests, validation | `internal/queue/submit.go` |
+| Transfer settings file and live apply | `internal/queue/settings.go` |
+| In-memory journal for the unsupported-version case | `internal/queue/memjournal.go` |
+| Bindings and wiring | `transfers.go`, `app.go` (`startup`, `shutdown`) |
+| devfake routing (one shared fake for browse and queue) | `devfake.go`, `devfake_off.go` |
+| Tests, through the bindings | `transfers_test.go` |
+
+### Wiring (the stage 2.1 checklist)
+
+`App.queueOptions(dir)` connects the queue to the app. `queue.Open` then: opens `journal.OpenFile` and creates `journal.NewRecovery` **before** the engine; builds the store, prober and cleaner from `s3x.NewClients(manager.Provider)`; starts `Recover` in a background goroutine; registers `Service.CredentialsChanged` with `manager.OnCredentialsChanged`, which runs `Engine.NotifyCredentialsChanged` and starts `RecoverProfile` in a goroutine. `Report.Warnings` and `FileStore.Warnings` are in `TransferStatus().warnings`.
+
+- `journal.ErrUnsupportedVersion`: the file is left alone, the queue uses an in-memory journal, uploads are refused with `uploadsDisabledReason`, downloads still work.
+- `journal.ErrLocked` (second instance): `queue.Open` fails with `ErrUnavailable` ("another copy of s4browser is already running..."), the App keeps no queue, and `TransferStatus` returns `available:false` and `error`. The first instance's journal is untouched (tested while its upload runs).
+- Shutdown (`closeQueue`, 30 s): stop cleanup, `Engine.Close` (cancels running jobs and aborts their uploads, as in design section 3), then close the journal.
+- devfake: `devQueueOptions` points transfers at the same in-process fake as browsing. Journal and settings go to a temp folder. `dev-small/downloads/sample{1..4}.bin` and `dev-media/samples/sample{1..4}.bin` (3 MiB to 8 GiB) have downloadable content; the 100,000 listed objects do not.
+
+### Bindings (methods on `App`, TypeScript in `frontend/wailsjs/go/main/App.d.ts`)
+
+| Method | Returns | Notes |
+|---|---|---|
+| `TransferStatus()` | `queue.Status` | Also sent as `s4:queue-status` when cleanup progresses |
+| `QueueJobs()` | `JobView[]` | Submission order. Call on open and after a `resync` event |
+| `QueueUploads(UploadRequest)` | `SubmitResult` | Whole call errors if uploads are off, no profile or bucket, or region unknown |
+| `QueueDownloads(DownloadRequest)` | `SubmitResult` | Same |
+| `PauseJob(id)`, `ResumeJob(id)`, `CancelJob(id)`, `RetryJob(id)`, `RemoveJob(id)` | `error` | Messages are user-readable |
+| `PauseAll()`, `ResumeAll()`, `CancelAll()` | `(int, error)` | Count of jobs changed |
+| `ClearFinished(includeFailed bool)` | `(int, error)` | Completed and cancelled; failed only if `includeFailed` |
+| `TransferSettings()` | `SettingsState` | `{current, defaults, limits}` |
+| `SetTransferSettings(TransferSettings)` | `SettingsState` | Validates, saves, applies live |
+
+Types (JSON names):
+- `UploadRequest {profileId, bucket, region, prefix, paths[]}`. Empty `region` means look it up through browsing. `prefix` is `""` or `"a/b/"` (slash added). Key is `prefix + file name`.
+- `DownloadRequest {profileId, bucket, region, keys[], destDir}`. The file is `destDir\<last key segment>`.
+- `SubmitResult {items: [{source, jobId?, error?}]}`: one item per path or key, in order. Refused items (relative path, missing file, folder, key ending in `/`, names Windows cannot hold or `..`, reserved device names) do not stop the others. **Stage 2.3 expands folders here and replaces `localName` with the full Windows rules**; the request and result shapes are meant to take that.
+- `JobView {id, direction("upload"|"download"), profile, bucket, key, localPath, name, state, phase, totalBytes, doneBytes, bytesPerSec, etaSeconds(-1 unknown), partsDone, partsTotal, retries, reason, errorCode, detail, warning, finished, canPause, canResume, canCancel, canRetry, canRemove}`. `state` is `queued|running|pausing|paused|credential-wait|cancelling|failing|cancelled|failed|completed`; `phase` is `preparing|transferring|finalizing`. `reason` is set for waits and failures (a credential wait names the profile). `detail` is the engine's full text. Use the `can*` flags for buttons.
+- `Status {available, error?, uploadsDisabled, uploadsDisabledReason?, warnings[], cleanup{running, finished, uploadsAborted, tempsRemoved, pending, error?}}`.
+- `TransferSettings {parallelFiles, partsPerFile, totalParts, partSize, uploadBytesPerSec, downloadBytesPerSec}`. Defaults are the engine's (4, 16, 32, 64 MiB, unlimited). `limits` gives the ranges. Saved in `transfer-settings.json` next to `profiles.json`. Concurrency applies at the next dispatch, caps at once, part size to jobs not yet planned. A damaged file is kept as `.bad-<time>` and a warning shown.
+
+### Events
+
+- `s4:queue` payload `{seq, at(unix ms), jobs: JobView[], removed?: string[], resync?}`. About 5 per second (the engine's 200 ms batch), only changed jobs, `seq` increases by 1. Merge `jobs` by id and drop `removed`. On `resync` call `QueueJobs`. A newly submitted job appears in the next batch (up to 200 ms), so call `QueueJobs` after a submit.
+- `s4:queue-status` payload is `Status`.
+
+### Evidence (`transfers_test.go`, all through binding methods, each ends with a goroutine leak check)
+
+| Requirement | Test |
+|---|---|
+| Upload and download round trip, byte-exact, no temp left, journal empty, clear reports `removed` | `TestUploadAndDownloadRoundTrip` |
+| Pause sends nothing, resume continues without resending finished parts | `TestPauseAndResume` |
+| Cancel leaves no multipart upload, no object, no journal entry | `TestCancelLeavesNoMultipartUpload` |
+| Pause, resume, cancel all; queued jobs; clear | `TestBulkCommands` |
+| Failure reason, retry, clear rules | `TestFailedJobShowsItsReason` |
+| Settings change while running (2 MiB/s cap lifted mid-upload), invalid refused, persisted, read after relaunch | `TestSettingsChangeWhileRunning`, `TestDamagedSettingsFileIsKeptAside` |
+| Credential wait in job state and events, then `CheckProfile` resumes it with probes an hour apart | `TestCredentialWaitThenRecovery` |
+| Events batched (20 parts, no two events within 100 ms, seq contiguous, progress visible) | `TestEventsAreBatched` |
+| Launch cleanup in the background, warnings exposed, non-temp path never deleted, deferred until credentials change | `TestLaunchCleanupRunsAndReportsWarnings`, `TestLaunchCleanupResumesWhenCredentialsChange`, `TestCorruptJournalIsReported` |
+| Unsupported journal, second instance | `TestUnsupportedJournalDisablesUploads`, `TestSecondInstanceIsRefused` |
+| Request validation | `TestSubmitValidation` |
+| Close with running jobs leaves nothing | `TestCloseWithRunningJobsLeavesNothing` |
+
+**Tests of the tests.** 16 deliberate bugs, all caught: credential change not sent to the engine, cleanup never started, `RecoverProfile` not run, unsupported journal leaving uploads on, clear removing failed jobs, settings not applied to the engine, settings not kept in memory, settings file not written, journal not closed, `ResumeAll` and `PauseAll` doing nothing, removal not reported, event `seq` stuck, lock error lost, reserved names allowed. One was missed at first (settings not kept in memory): the test now checks the value `SetTransferSettings` returns.
+
+### Open risks
+
+- **Quitting cancels running jobs** (engine close semantics). Stage 2.4 should warn when closing with active transfers. Nothing resumes across a restart.
+- **Not run in the real window.** The bindings were exercised from Go tests only. `runtime.EventsEmit`, `openQueue` (config folder) and `shutdown` run only in the real app.
+- **Region lookup** for an empty `region` uses `browse.Service.Region`. The UI should pass the region it already has.
+- **`localName` is the minimum**, not the Windows rules (stage 2.3). A destination that already exists fails the job with `ErrDestinationExists`.
+- **Jobs stay until cleared.** 1,000 tracked jobs fit the memory bound.
+- Real S3 behaviour of the new paths is unverified (stage 4.3), and the 2.1 risks still apply.
+
+### Next
+
+Stage 2.3 (folder transfers, Windows filename and path safety) extends `UploadRequest`, `DownloadRequest` and `localName` in `internal/queue/submit.go`. Stage 2.4 builds the dock on the bindings and events above. Neither is started here.

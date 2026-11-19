@@ -3,9 +3,11 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -14,11 +16,13 @@ import (
 
 	"s4browser/internal/browse"
 	"s4browser/internal/fakes3"
+	"s4browser/internal/queue"
 )
 
-// Development only: `wails dev -tags devfake` points browsing at an in-process
-// fake S3 with fake keys, whatever profile is selected, so the UI can be tried
-// with 100,000 objects and no AWS account. Release builds do not contain it.
+// Development only: `wails dev -tags devfake` points browsing and transfers at an
+// in-process fake S3 with fake keys, whatever profile is selected, so the UI can
+// be tried with 100,000 objects and no AWS account. Release builds do not
+// contain it.
 
 const devProfileID = "dev:fake"
 
@@ -29,7 +33,20 @@ func devProfile(id string) string {
 	return id
 }
 
-func devBrowseOptions(o *browse.Options) error {
+// The one fake S3 that browsing and transfers share, so a transfer started in the
+// UI shows up in the listing.
+var (
+	devOnce   sync.Once
+	devServer *fakes3.Server
+	devErr    error
+)
+
+func devFake() (*fakes3.Server, error) {
+	devOnce.Do(func() { devServer, devErr = newDevFake() })
+	return devServer, devErr
+}
+
+func newDevFake() (*fakes3.Server, error) {
 	fake, err := fakes3.New(fakes3.Options{BucketRegions: map[string]string{
 		"dev-media":  "us-west-2",
 		"dev-small":  "us-east-1",
@@ -37,7 +54,7 @@ func devBrowseOptions(o *browse.Options) error {
 		"dev-hidden": "ap-southeast-2", // add it by name with S4_DEVFAKE_DENY_LIST=1
 	}})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	base := time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC)
 	for i := range 100_000 {
@@ -52,24 +69,66 @@ func devBrowseOptions(o *browse.Options) error {
 	_ = fake.PutListed("dev-small", "readme.txt", 1234, base)
 	_ = fake.PutListed("dev-small", "a b+c%d.mov", 99, base)
 	_ = fake.PutListed("dev-hidden", "secret/x.bin", 1, base)
+	// Objects that can be downloaded: their content is a generated pattern. The
+	// listed objects above have a size but no content, and fail on download.
+	for i, size := range []int64{3 << 20, 200 << 20, 1 << 30, 8 << 30} {
+		_ = fake.PutSynthetic("dev-small", fmt.Sprintf("downloads/sample%d.bin", i+1), uint64(i+1), size)
+		_ = fake.PutSynthetic("dev-media", fmt.Sprintf("samples/sample%d.bin", i+1), uint64(i+11), size)
+	}
 	// S4_DEVFAKE_DENY_LIST=1 emulates a role that may not list buckets, so
 	// buckets must be added by name.
 	if os.Getenv("S4_DEVFAKE_DENY_LIST") != "" {
 		fake.AddRule(fakes3.Rule{Op: fakes3.OpListBuckets, Fault: fakes3.AccessDenied()})
 	}
+	log.Printf("devfake: fake S3 at %s", fake.Endpoint())
+	return fake, nil
+}
+
+func devClientOptions(fake *fakes3.Server) func(*s3.Options) {
+	return func(so *s3.Options) {
+		so.BaseEndpoint = aws.String(fake.Endpoint())
+		so.UsePathStyle = true
+		so.HTTPClient = fake.HTTPClient()
+	}
+}
+
+func devCredentials(string) (aws.CredentialsProvider, error) {
+	return credentials.NewStaticCredentialsProvider(fakes3.AccessKeyID, fakes3.SecretAccessKey, ""), nil
+}
+
+func devBrowseOptions(o *browse.Options) error {
+	fake, err := devFake()
+	if err != nil {
+		return err
+	}
 	dir, err := os.MkdirTemp("", "s4browser-devfake-")
 	if err != nil {
 		return err
 	}
-	log.Printf("devfake: fake S3 at %s, saved buckets in %s", fake.Endpoint(), dir)
+	log.Printf("devfake: saved buckets in %s", dir)
 	o.Dir = dir
-	o.Credentials = func(string) (aws.CredentialsProvider, error) {
-		return credentials.NewStaticCredentialsProvider(fakes3.AccessKeyID, fakes3.SecretAccessKey, ""), nil
+	o.Credentials = devCredentials
+	o.ClientOptions = append(o.ClientOptions, devClientOptions(fake))
+	return nil
+}
+
+// devQueueOptions routes transfers to the same fake. The journal and the
+// transfer settings go to a temporary folder, so a dev run neither takes the real
+// journal's lock nor changes the real settings. Credentials never expire.
+func devQueueOptions(o *queue.Options) error {
+	fake, err := devFake()
+	if err != nil {
+		return err
 	}
-	o.ClientOptions = append(o.ClientOptions, func(so *s3.Options) {
-		so.BaseEndpoint = aws.String(fake.Endpoint())
-		so.UsePathStyle = true
-		so.HTTPClient = fake.HTTPClient()
-	})
+	dir, err := os.MkdirTemp("", "s4browser-devfake-queue-")
+	if err != nil {
+		return err
+	}
+	log.Printf("devfake: transfer journal and settings in %s", dir)
+	o.Dir = dir
+	o.Provider = devCredentials
+	o.Refresh = func(context.Context, string) error { return nil }
+	o.Subscribe = nil
+	o.ClientOptions = append(o.ClientOptions, devClientOptions(fake))
 	return nil
 }

@@ -10,6 +10,7 @@ import (
 
 	"s4browser/internal/browse"
 	"s4browser/internal/creds"
+	"s4browser/internal/queue"
 )
 
 // App is the stage 0.6 file-drop spike. It has no engine and no S3 access: it
@@ -28,6 +29,9 @@ type App struct {
 	// browse is nil if browsing could not start, and browseErr then says why.
 	browse    *browse.Service
 	browseErr string
+	// queue is nil if transfers could not start, and queueErr then says why.
+	queue    *queue.Service
+	queueErr string
 }
 
 // NewApp creates the App.
@@ -59,10 +63,14 @@ func (a *App) startup(ctx context.Context) {
 	if a.browse, err = a.openBrowse(); err != nil {
 		a.browseErr = err.Error()
 	}
+	if a.queue, err = a.openQueue(); err != nil {
+		a.queueErr = err.Error()
+	}
 	runtime.OnFileDrop(ctx, a.onDrop)
 }
 
 func (a *App) shutdown(context.Context) {
+	a.closeQueue()
 	if a.browse != nil {
 		a.browse.Close()
 	}

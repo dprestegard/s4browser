@@ -379,3 +379,301 @@ export namespace main {
 
 }
 
+export namespace queue {
+	
+	export class CleanupStatus {
+	    running: boolean;
+	    finished: boolean;
+	    uploadsAborted: number;
+	    tempsRemoved: number;
+	    pending: number;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.finished = source["finished"];
+	        this.uploadsAborted = source["uploadsAborted"];
+	        this.tempsRemoved = source["tempsRemoved"];
+	        this.pending = source["pending"];
+	        this.error = source["error"];
+	    }
+	}
+	export class DownloadRequest {
+	    profileId: string;
+	    bucket: string;
+	    region: string;
+	    keys: string[];
+	    destDir: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DownloadRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.bucket = source["bucket"];
+	        this.region = source["region"];
+	        this.keys = source["keys"];
+	        this.destDir = source["destDir"];
+	    }
+	}
+	export class JobView {
+	    id: string;
+	    direction: string;
+	    profile: string;
+	    bucket: string;
+	    key: string;
+	    localPath: string;
+	    name: string;
+	    state: string;
+	    phase: string;
+	    totalBytes: number;
+	    doneBytes: number;
+	    bytesPerSec: number;
+	    etaSeconds: number;
+	    partsDone: number;
+	    partsTotal: number;
+	    retries: number;
+	    reason?: string;
+	    errorCode?: string;
+	    detail?: string;
+	    warning?: string;
+	    finished: boolean;
+	    canPause: boolean;
+	    canResume: boolean;
+	    canCancel: boolean;
+	    canRetry: boolean;
+	    canRemove: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new JobView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.direction = source["direction"];
+	        this.profile = source["profile"];
+	        this.bucket = source["bucket"];
+	        this.key = source["key"];
+	        this.localPath = source["localPath"];
+	        this.name = source["name"];
+	        this.state = source["state"];
+	        this.phase = source["phase"];
+	        this.totalBytes = source["totalBytes"];
+	        this.doneBytes = source["doneBytes"];
+	        this.bytesPerSec = source["bytesPerSec"];
+	        this.etaSeconds = source["etaSeconds"];
+	        this.partsDone = source["partsDone"];
+	        this.partsTotal = source["partsTotal"];
+	        this.retries = source["retries"];
+	        this.reason = source["reason"];
+	        this.errorCode = source["errorCode"];
+	        this.detail = source["detail"];
+	        this.warning = source["warning"];
+	        this.finished = source["finished"];
+	        this.canPause = source["canPause"];
+	        this.canResume = source["canResume"];
+	        this.canCancel = source["canCancel"];
+	        this.canRetry = source["canRetry"];
+	        this.canRemove = source["canRemove"];
+	    }
+	}
+	export class SettingsLimits {
+	    minParallelFiles: number;
+	    maxParallelFiles: number;
+	    minPartsPerFile: number;
+	    maxPartsPerFile: number;
+	    minTotalParts: number;
+	    maxTotalParts: number;
+	    minPartSize: number;
+	    maxPartSize: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SettingsLimits(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.minParallelFiles = source["minParallelFiles"];
+	        this.maxParallelFiles = source["maxParallelFiles"];
+	        this.minPartsPerFile = source["minPartsPerFile"];
+	        this.maxPartsPerFile = source["maxPartsPerFile"];
+	        this.minTotalParts = source["minTotalParts"];
+	        this.maxTotalParts = source["maxTotalParts"];
+	        this.minPartSize = source["minPartSize"];
+	        this.maxPartSize = source["maxPartSize"];
+	    }
+	}
+	export class TransferSettings {
+	    parallelFiles: number;
+	    partsPerFile: number;
+	    totalParts: number;
+	    partSize: number;
+	    uploadBytesPerSec: number;
+	    downloadBytesPerSec: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TransferSettings(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.parallelFiles = source["parallelFiles"];
+	        this.partsPerFile = source["partsPerFile"];
+	        this.totalParts = source["totalParts"];
+	        this.partSize = source["partSize"];
+	        this.uploadBytesPerSec = source["uploadBytesPerSec"];
+	        this.downloadBytesPerSec = source["downloadBytesPerSec"];
+	    }
+	}
+	export class SettingsState {
+	    current: TransferSettings;
+	    defaults: TransferSettings;
+	    limits: SettingsLimits;
+	
+	    static createFrom(source: any = {}) {
+	        return new SettingsState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.current = this.convertValues(source["current"], TransferSettings);
+	        this.defaults = this.convertValues(source["defaults"], TransferSettings);
+	        this.limits = this.convertValues(source["limits"], SettingsLimits);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class Status {
+	    available: boolean;
+	    error?: string;
+	    uploadsDisabled: boolean;
+	    uploadsDisabledReason?: string;
+	    warnings: string[];
+	    cleanup: CleanupStatus;
+	
+	    static createFrom(source: any = {}) {
+	        return new Status(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.error = source["error"];
+	        this.uploadsDisabled = source["uploadsDisabled"];
+	        this.uploadsDisabledReason = source["uploadsDisabledReason"];
+	        this.warnings = source["warnings"];
+	        this.cleanup = this.convertValues(source["cleanup"], CleanupStatus);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SubmitItem {
+	    source: string;
+	    jobId?: string;
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubmitItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.jobId = source["jobId"];
+	        this.error = source["error"];
+	    }
+	}
+	export class SubmitResult {
+	    items: SubmitItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SubmitResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], SubmitItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class UploadRequest {
+	    profileId: string;
+	    bucket: string;
+	    region: string;
+	    prefix: string;
+	    paths: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new UploadRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.bucket = source["bucket"];
+	        this.region = source["region"];
+	        this.prefix = source["prefix"];
+	        this.paths = source["paths"];
+	    }
+	}
+
+}
+
