@@ -1296,7 +1296,7 @@ Stage 4.1 (independent review of engine, journal and path safety) starts from th
 
 ## Stage 4.1: independent review of engine, journal and path safety
 
-**Status:** done, not committed (waiting for the user's go-ahead). The findings are filed and ranked in `docs/review-4.1.md`. No code was changed. The review used the session's model (Opus 5.5), as the plan assigns.
+**Status:** done, committed as `4b0c86b`. The findings are filed and ranked in `docs/review-4.1.md`. No code was changed. The review used the session's model (Opus 5.5), as the plan assigns.
 
 ### Scope and method
 
@@ -1321,3 +1321,64 @@ No path traversal, data race or deadlock was found. The review lists what was ch
 ### Next
 
 Stage 4.2 (fix findings, run the full suite under the race detector) starts from this commit. It is not started here.
+
+## Stage 4.2: fix review findings, full suite under the race detector
+
+**Status:** done, not committed (waiting for the user's go-ahead). F1 to F7 from `docs/review-4.1.md` are fixed, each with a test written for it. `go test -race -count=1 ./...` passes in every package. `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (engine, fsx, journal, queue) pass. The new tests also passed 10 runs in a row under `-race`. No AWS calls were made and `~/.aws` was not read. The work used the session's model (Opus 5.5), because F1 part 2 and F7 change engine contracts. `docs/engine-design.md` is updated to match.
+
+### What changed
+
+| Finding | Fix | Files |
+|---|---|---|
+| F1 (High), part 1 | `FileSink` reserves space per volume: each open temp file counts the bytes it still has to write, or nothing if its clusters were taken at Create. A new download must fit in free space after the others' remainder and the 64 MiB reserve. Checking and creating happen under one lock. A file stops counting at Commit or its first Abort. | `internal/engine/filesink.go`, `internal/fsx/space.go`, `fsx.VolumeOf` and `Preallocated` in `strategy_windows.go` and `strategy_other.go` |
+| F1 (High), part 2 | A write that finds the drive full returns `ErrDiskFull` (new sentinel, permanent). The scheduler interrupts the part and pauses the job instead of failing it. `JobSnapshot.PauseReason` (new field) is `DiskFullNotice`, and the queue shows it as the job's reason. The temp file, journal entry and written bytes are kept, and Resume continues. A full drive while creating the file is `ErrInsufficientSpace`. | `internal/engine/upload.go` (`pauseForDiskFull`), `api.go`, `job.go`, `errors.go`, `internal/queue/view.go` |
+| F2 (Medium) | `journal.Decode` reads the version first, without strict fields. A newer journal returns `ErrUnsupportedVersion` and stays in place, whatever new fields it holds. A file with no version, or one that is not a JSON object, is still corrupt. | `internal/journal/journal.go` |
+| F3 (Medium) | `FileSink.Prepare` removes a leftover temp file with the job's own name before creating it. If that fails, the job fails saying so, and can be retried later. | `internal/engine/filesink.go` |
+| F4 (Low) | Cancel during finalizing waits only while a request is in flight. `advance` applies a waiting cancel before sending the next finalizing request, so a cancel made while the source was being verified sends no Complete. A cancel during a Complete backoff applies at once. Once the object or file is in place, the job still finishes as completed. | `internal/engine/scheduler.go` (`cancelJob`), `upload.go` (`advance`) |
+| F5 (Low) | A download attempt that wrote bytes resets its part's attempt count and the progress clock, because the next attempt resumes after those bytes. An attempt that wrote nothing is charged as before. | `internal/engine/download.go` |
+| F6 (Low) | `SubmitDownloads` reads the destinations of unfinished downloads (not completed or cancelled; failed counts, because Retry writes there) from one engine snapshot. It refuses a destination already in use, ignoring case on Windows and macOS, with code `exists`. Requests are placed one at a time under a new `placeMu`, never held with `Service.mu`. A folder's files get the same check. | `internal/queue/submit.go`, `expand.go`, `queue.go` |
+| F7 (Low, design) | A job in credential wait keeps its slot but does not count against `MaxActiveFiles`. Queued jobs of the waiting profile are set aside in order and return to the front of the queue when no job of that profile waits any more (credentials restored, or the waiting jobs paused or cancelled). After a wait, running jobs can exceed the file limit until enough finish. Parts stay within `MaxActiveParts`. | `internal/engine/scheduler.go` (`pump`, `slots`, `releaseHeld`) |
+
+Contract changes: `ErrDiskFull`, `DiskFullNotice` and `JobSnapshot.PauseReason` are new. The engine can now pause a job itself. Credential-wait slots no longer count toward admission. Cancel during finalizing is deferred only while a request is in flight. No state-table edge was added: the full-drive pause uses the existing running → pausing edge.
+
+### Evidence (tests)
+
+- `internal/engine/diskspace_test.go`:
+  - `TestFullDrivePausesAndKeepsTheDownload`: a strategy that fills after 20 MiB pauses the job with the reason, keeps the temp file and journal entry, and on Resume fetches no more than the missing bytes. Every byte matches.
+  - `TestFullDriveThenCancelRemovesTheTempFile`.
+  - `TestSinkReservesSpaceAcrossDownloads`: the second of two downloads that fit alone is refused, the reservation shrinks as bytes are written, Abort returns it, and another volume is separate.
+  - `TestPreallocatedFileReservesNothing` (Windows).
+  - `TestParallelDownloadsToOneDriveAreAdmittedInTurn`: through the engine, the second download fails before fetching anything and the first completes.
+  - `TestRetryAfterTempFileWasLeftBehind`: the first abort leaves the file, and Retry completes.
+- `internal/engine/finalize_test.go`:
+  - `TestCancelWhileVerifyingSourceSendsNoComplete`: no Complete is sent and no object is created.
+  - `TestCancelWhileCompleteWaitsForRetry`: with a one-hour backoff, the cancel applies at once and only one Complete was sent.
+  - `TestDownloadFinishesThroughRepeatedResets`: every GET is reset after 1 MiB, so each part needs 5 attempts with a budget of 3. The download completes with each byte written once.
+  - `TestDownloadWithoutProgressStillFails`: a reset before any byte arrives is charged.
+  - `TestCredentialWaitDoesNotBlockOtherProfiles`: with one file at a time, the other profile's job completes during the wait, the waiting profile's queued job stays queued, and both finish once credentials return.
+  - `TestHeldJobsReturnWhenTheWaitEndsWithoutCredentials`.
+- `internal/journal`: a version-2 journal with unknown fields and kinds is `ErrUnsupportedVersion` and is left untouched by `OpenFile`. A missing or non-numeric version, and a non-object, are corrupt.
+- `internal/fsx`: `IsDiskFull` matches the two Windows codes and the sentinel, and nothing else. `VolumeOf` gives the same lower-case mount point for a folder and its parent.
+- `transfers_test.go` `TestSecondDownloadToSameDestinationIsRefused` (through the bindings): the same key again, and another key whose name differs only in case, are refused with `exists` while the first download runs. The first then completes. `internal/queue` `TestFolderDownloadKeepsSubmitRefusalCode`.
+- The existing tests, including the fault suite, pass unchanged. `TestSubmitValidation` was only reformatted by `gofmt`.
+
+### Not fixed
+
+- **F8 to F11 (Info)** are left as filed. F11 (no end-to-end download checksum) belongs in the README's known limits (stage 4.4).
+- **A full drive during commit** (the final sync or rename) still fails the job and removes the temp file, because finalizing cannot pause. The bytes are all written by then, so this needs metadata space only and is unlikely.
+
+### Not verified
+
+- **No real full drive.** The full-drive tests use a strategy that reports `ErrDiskFull`. The mapping from `ERROR_DISK_FULL` is unit-tested, but no download has filled a real volume. A small VHD or a quota would show it, if wanted in stage 4.3.
+- **The UI was not looked at.** The paused reason reaches `JobView.Reason`, which the queue already shows for paused jobs. It was not seen in the running app. A refused duplicate destination appears in the existing "not queued" report.
+- `GetVolumePathName` on a folder mounted from another volume, and on network shares, was not tried. A failure there makes `Prepare` fail with a clear message rather than skip the check.
+
+### Open risks
+
+- **Over the file limit after a credential wait.** When credentials return, every waiting job resumes alongside the jobs admitted meanwhile, up to twice `MaxActiveFiles`. Parts, and so memory and connections, stay within their limits. Open file handles and part tables do not.
+- **F4 cancel after a failed Complete.** A Complete that failed retryably may have succeeded. Cancelling during its backoff aborts, which finds `NoSuchUpload`, and the job ends cancelled although the object exists. This was already possible before (see F8).
+- **F6 holds a failed download's destination** until it is removed from the queue, because Retry would write there. The refusal says so.
+
+### Next
+
+Stage 4.3 (real AWS verification with your hands-on checks) starts from this commit. It is not started here.

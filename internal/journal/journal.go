@@ -153,9 +153,24 @@ func Encode(entries []Entry) ([]byte, error) {
 	return json.MarshalIndent(File{Version: FormatVersion, Entries: sorted}, "", "  ")
 }
 
-// Decode parses file content. Unknown fields are rejected, so a journal holding
-// anything outside the allowlist is treated as corrupt.
+// Decode parses file content. The version is read first and leniently, so a
+// journal from a newer build returns ErrUnsupportedVersion whatever else it
+// holds. A journal of this version with unknown fields, anything outside the
+// allowlist, is treated as corrupt.
 func Decode(data []byte) ([]Entry, error) {
+	var head struct {
+		Version *int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &head); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorrupt, err)
+	}
+	if head.Version == nil {
+		return nil, fmt.Errorf("%w: no version", ErrCorrupt)
+	}
+	if *head.Version != FormatVersion {
+		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, *head.Version)
+	}
+
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 
@@ -165,9 +180,6 @@ func Decode(data []byte) ([]Entry, error) {
 	}
 	if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: trailing data", ErrCorrupt)
-	}
-	if file.Version != FormatVersion {
-		return nil, fmt.Errorf("%w: %d", ErrUnsupportedVersion, file.Version)
 	}
 	seen := make(map[string]struct{}, len(file.Entries))
 	for _, entry := range file.Entries {

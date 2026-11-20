@@ -155,7 +155,8 @@ func TestOpenSetsAsideCorruptJournal(t *testing.T) {
 func TestOpenLeavesNewerJournalAlone(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, FileName)
-	content := []byte(`{"version":2,"entries":[]}`)
+	// The newer format has a field this build does not know (review F2).
+	content := []byte(`{"version":2,"entries":[{"id":"a-1","kind":"download-temp","phase":"active","createdAt":"2026-11-17T12:00:00Z","tempPath":"x","checksum":"y"}]}`)
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatal(err)
 	}

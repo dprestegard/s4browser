@@ -14,7 +14,8 @@ const (
 	// JobPaused holds no slot and no in-flight work. Completed parts are kept.
 	JobPaused
 	// JobCredentialWait holds its slot, dispatches nothing and awaits a
-	// successful credential probe. Completed parts are kept.
+	// successful credential probe. Completed parts are kept. Its slot does not
+	// count against MaxActiveFiles, so other profiles' jobs still start.
 	JobCredentialWait
 	// JobCancelling drains attempts, then aborts the upload or removes the temp file.
 	JobCancelling
@@ -59,7 +60,7 @@ type JobEvent uint8
 const (
 	// JobEvAdmit: the scheduler granted an active-file slot.
 	JobEvAdmit JobEvent = iota
-	// JobEvPause: the user asked to pause.
+	// JobEvPause: the user asked to pause, or a download found its drive full.
 	JobEvPause
 	// JobEvResume: the user asked to resume a paused job.
 	JobEvResume

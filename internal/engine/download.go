@@ -400,6 +400,14 @@ func (s *scheduler) onDownloadPartDone(j *job, index int, written int64, preempt
 			j.partial = make(map[int32]int64)
 		}
 		j.partial[int32(index)] = total
+		// The next attempt resumes after these bytes, so an attempt that wrote
+		// some is progress: it starts the part's budget and the outage clock
+		// afresh. Otherwise a link that drops every few hundred MiB would fail a
+		// large part while bytes were flowing the whole time.
+		if class == ClassRetryable {
+			p.attempts = 0
+			j.lastProgress = s.cfg.Clock.Now()
+		}
 	}
 	s.partFailed(j, index, class, err)
 }

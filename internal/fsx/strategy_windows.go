@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"unsafe"
 
@@ -97,13 +98,14 @@ func (s ntfsStrategy) Create(path string, size int64) (WriteTarget, error) {
 			}
 		}
 	}
-	return &ntfsTarget{fileTarget: fileTarget{f}, sparse: sparse, lead: lead}, nil
+	return &ntfsTarget{fileTarget: fileTarget{f}, sparse: sparse, lead: lead, extended: size > 0}, nil
 }
 
 type ntfsTarget struct {
 	fileTarget
-	sparse bool
-	lead   int64
+	sparse   bool
+	lead     int64
+	extended bool // The end of file was set to the final size.
 }
 
 // MaxLead reports the lead this file needs, which differs from its strategy's
@@ -203,6 +205,31 @@ func FreeSpace(dir string) (int64, error) {
 	}
 	return int64(available), nil
 }
+
+// isDiskFull matches ERROR_DISK_FULL and ERROR_HANDLE_DISK_FULL. A quota that
+// is exceeded is reported as ERROR_DISK_FULL as well.
+func isDiskFull(err error) bool {
+	return errors.Is(err, windows.ERROR_DISK_FULL) || errors.Is(err, windows.ERROR_HANDLE_DISK_FULL)
+}
+
+// VolumeOf names the volume holding dir: its mount point, such as `c:\` or a
+// folder a volume is mounted on, in lower case. Downloads to the same volume
+// share its free space.
+func VolumeOf(dir string) (string, error) {
+	path, err := windows.UTF16PtrFromString(dir)
+	if err != nil {
+		return "", err
+	}
+	buf := make([]uint16, windows.MAX_LONG_PATH)
+	if err := windows.GetVolumePathName(path, &buf[0], uint32(len(buf))); err != nil {
+		return "", err
+	}
+	return strings.ToLower(windows.UTF16ToString(buf)), nil
+}
+
+// Preallocated reports whether Create took the clusters: true unless the file
+// is sparse.
+func (t *ntfsTarget) Preallocated() bool { return !t.sparse && t.extended }
 
 type moveFinalizer struct{}
 

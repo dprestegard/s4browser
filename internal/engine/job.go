@@ -117,10 +117,12 @@ type job struct {
 	lastProgress time.Time
 
 	// Reporting.
-	transferred   atomic.Int64
-	retries       int
-	jobErr        *JobError
-	warning       string
+	transferred atomic.Int64
+	retries     int
+	jobErr      *JobError
+	warning     string
+	// notice says why the engine itself paused the job. Resume clears it.
+	notice        string
 	dirty         bool
 	reportedBytes int64
 	rateBytes     int64
@@ -223,6 +225,7 @@ func (j *job) resetRun() {
 	j.retries = 0
 	j.jobErr = nil
 	j.warning = ""
+	j.notice = ""
 	j.epoch++
 }
 
@@ -248,7 +251,9 @@ func (j *job) snapshot() JobSnapshot {
 		PartsTotal:  j.partCount(),
 		Retries:     j.retries,
 		Warning:     j.warning,
+		PauseReason: j.notice,
 	}
+
 	if j.jobErr != nil {
 		copied := *j.jobErr
 		snapshot.Err = &copied

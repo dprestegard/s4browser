@@ -55,6 +55,10 @@ type JobSnapshot struct {
 	Err     *JobError
 	// Warning reports a non-fatal problem, such as an abort deferred to next launch.
 	Warning string
+	// PauseReason says why the engine itself paused the job, such as
+	// DiskFullNotice. It is empty for a pause the user asked for, and is
+	// cleared by Resume.
+	PauseReason string
 }
 
 // Transition records one job state change.

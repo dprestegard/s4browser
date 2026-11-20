@@ -45,10 +45,13 @@ type scheduler struct {
 	abortCancel context.CancelFunc
 
 	// Loop-owned state.
-	settings    Settings
-	jobs        map[JobID]*job
-	order       []*job
-	queue       []*job
+	settings Settings
+	jobs     map[JobID]*job
+	order    []*job
+	queue    []*job
+	// held keeps queued jobs, per profile, that were not admitted because that
+	// profile's jobs wait for credentials. Entries may be stale, as in queue.
+	held        map[string][]*job
 	slotted     []*job
 	roundRobin  int
 	activeParts int
@@ -108,6 +111,7 @@ func New(cfg Config) (Engine, error) {
 		finalBatch:   make(chan ProgressBatch, 1),
 		settings:     cfg.Settings,
 		jobs:         make(map[JobID]*job),
+		held:         make(map[string][]*job),
 		probes:       make(map[string]*probeState),
 		timer:        cfg.Clock.NewTimer(time.Hour),
 		sendBuffer:   cfg.SendBuffer,
@@ -250,6 +254,7 @@ func (s *scheduler) Resume(ctx context.Context, id JobID) error {
 		if !s.fire(j, JobEvResume) {
 			return ErrIllegalState
 		}
+		j.notice = ""
 		s.queue = append(s.queue, j)
 		return nil
 	})
@@ -262,12 +267,16 @@ func (s *scheduler) Cancel(ctx context.Context, id JobID) error {
 	})
 }
 
-// cancelJob applies Cancel. During finalizing a user cancel is only a flag, because
-// the outcome of Complete must be known first. Engine close is never deferred.
+// cancelJob applies Cancel. During finalizing a user cancel waits only while a
+// request is in flight, because the outcome of Complete or of the commit must be
+// known first, and once the object or file is in place, when the job finishes
+// as completed. Between requests, such as during a retry backoff, it applies at
+// once. advance applies a waiting cancel before it starts the next finalizing
+// request. Engine close is never deferred.
 func (s *scheduler) cancelJob(j *job, cause error) error {
-	waitingForCredentials := j.state == JobCredentialWait && j.control == 0
-	if cause != ErrEngineClosed && j.phase == PhaseFinalizing && !waitingForCredentials &&
-		(j.state == JobRunning || j.state == JobCredentialWait) {
+	if cause != ErrEngineClosed && j.phase == PhaseFinalizing &&
+		(j.state == JobRunning || j.state == JobCredentialWait) &&
+		(j.control > 0 || j.step >= stepJournalDelete) {
 		j.cancelRequested = true
 		return nil
 	}
@@ -406,13 +415,21 @@ func (s *scheduler) pump() {
 		s.pumpShutdown()
 		return
 	}
+	s.releaseHeld()
 	for s.slots() < s.settings.MaxActiveFiles && len(s.queue) > 0 {
 		j := s.queue[0]
 		s.queue[0] = nil
 		s.queue = s.queue[1:]
-		if j.state == JobQueued {
-			s.admit(j)
+		if j.state != JobQueued {
+			continue
 		}
+		// A job of a profile whose credentials are being waited for would only
+		// join the wait, so it is set aside, in order, until the wait ends.
+		if profile := j.spec.Ref.Profile; s.anyWaiting(profile) {
+			s.held[profile] = append(s.held[profile], j)
+			continue
+		}
+		s.admit(j)
 	}
 	if len(s.queue) == 0 {
 		s.queue = nil
@@ -421,7 +438,32 @@ func (s *scheduler) pump() {
 	s.preemptStarved()
 }
 
-func (s *scheduler) slots() int { return len(s.slotted) }
+// slots counts the slots that limit admission. A job waiting for credentials
+// keeps its slot, so it resumes at once when they return, but does not count:
+// one profile's expired session must not stop other profiles' jobs. When the
+// wait ends, the running jobs can exceed MaxActiveFiles until enough of them
+// finish. Parts stay within MaxActiveParts throughout.
+func (s *scheduler) slots() int {
+	n := 0
+	for _, j := range s.slotted {
+		if j.state != JobCredentialWait {
+			n++
+		}
+	}
+	return n
+}
+
+// releaseHeld returns the jobs set aside for a profile to the front of the
+// queue, in their order, once no job of that profile waits for credentials.
+func (s *scheduler) releaseHeld() {
+	for profile, jobs := range s.held {
+		if s.anyWaiting(profile) {
+			continue
+		}
+		delete(s.held, profile)
+		s.queue = append(jobs, s.queue...)
+	}
+}
 
 func (s *scheduler) admit(j *job) {
 	s.fire(j, JobEvAdmit)

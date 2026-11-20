@@ -4,7 +4,9 @@ package fsx
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -128,5 +130,40 @@ func TestValidDataNeedsThePrivilege(t *testing.T) {
 	}
 	if strategy.MaxLead() != 0 {
 		t.Fatalf("valid-data needs no lead, got %d", strategy.MaxLead())
+	}
+}
+
+func TestIsDiskFull(t *testing.T) {
+	for _, err := range []error{
+		&os.PathError{Op: "write", Path: "x", Err: windows.ERROR_DISK_FULL},
+		&os.PathError{Op: "write", Path: "x", Err: windows.ERROR_HANDLE_DISK_FULL},
+		ErrDiskFull,
+	} {
+		if !IsDiskFull(err) {
+			t.Errorf("%v is a full disk", err)
+		}
+	}
+	for _, err := range []error{nil, windows.ERROR_ACCESS_DENIED, errors.New("disk full")} {
+		if IsDiskFull(err) {
+			t.Errorf("%v is not a full disk", err)
+		}
+	}
+}
+
+func TestVolumeOf(t *testing.T) {
+	dir := t.TempDir()
+	a, err := VolumeOf(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := VolumeOf(filepath.Dir(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == "" || a != b || a != strings.ToLower(a) {
+		t.Fatalf("volumes %q and %q", a, b)
+	}
+	if want := strings.ToLower(filepath.VolumeName(dir)) + `\`; a != want {
+		t.Logf("volume %q, drive %q (a mounted folder?)", a, want)
 	}
 }

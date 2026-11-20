@@ -95,6 +95,12 @@ func TestDecodeRejects(t *testing.T) {
 		{"invalid entry", `{"version":1,"entries":[{"id":"a-1"}]}`, ErrCorrupt},
 		{"duplicate", `{"version":1,"entries":[` + valid + `,` + valid + `]}`, ErrCorrupt},
 		{"future version", `{"version":2,"entries":[]}`, ErrUnsupportedVersion},
+		// A newer format may add fields and entry kinds. It must be refused as a
+		// newer version, not set aside as corrupt (review F2).
+		{"future version with new fields", `{"version":2,"entries":[{"id":"a-1","kind":"new-kind","extra":1}],"more":true}`, ErrUnsupportedVersion},
+		{"missing version", `{"entries":[]}`, ErrCorrupt},
+		{"version not a number", `{"version":"1","entries":[]}`, ErrCorrupt},
+		{"not an object", `[]`, ErrCorrupt},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

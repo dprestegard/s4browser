@@ -87,6 +87,10 @@ var (
 	ErrInsufficientSpace = fsx.ErrInsufficientSpace
 	// ErrUnsafePath means a destination path failed validation.
 	ErrUnsafePath = fsx.ErrUnsafePath
+	// ErrDiskFull means a download write found the drive full. It is permanent,
+	// but the scheduler pauses the job instead of failing it, so the temp file
+	// and the parts already written are kept until the user resumes.
+	ErrDiskFull = fsx.ErrDiskFull
 
 	// Command errors, returned directly to the caller.
 
@@ -252,7 +256,7 @@ func isPermanentSentinel(err error) bool {
 	for _, target := range []error{
 		ErrInvalidSize, ErrObjectTooLarge, ErrObjectChanged, ErrSourceChanged,
 		ErrChecksumMismatch, ErrLocalIO, ErrWriteRefused, ErrJournal,
-		ErrDestinationExists, ErrInsufficientSpace, ErrUnsafePath,
+		ErrDestinationExists, ErrInsufficientSpace, ErrUnsafePath, ErrDiskFull,
 	} {
 		if errors.Is(err, target) {
 			return true

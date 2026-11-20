@@ -88,6 +88,8 @@ type options struct {
 	discardProgress bool
 	// sendBuffer sets Config.SendBuffer.
 	sendBuffer int64
+	// source decorates the synthetic source given to the engine.
+	source func(engine.Source) engine.Source
 }
 
 type discardObserver struct{}
@@ -153,12 +155,16 @@ func newHarness(t *testing.T, opts options) *harness {
 	if opts.journal != nil {
 		journalStore = opts.journal(store)
 	}
+	var source engine.Source = h.source
+	if opts.source != nil {
+		source = opts.source(source)
+	}
 	var observer engine.Observer = h.obs
 	if opts.discardProgress {
 		observer = discardObserver{}
 	}
 	h.engine, err = engine.New(engine.Config{
-		Store: objectStore, Source: h.source, Sink: sink,
+		Store: objectStore, Source: source, Sink: sink,
 		Journal: journalStore, Prober: h.prober, Clock: engine.RealClock{}, Observer: observer, Guard: guard,
 		Jitter: func() float64 { return 0.5 }, Settings: settings, Retry: retry, Timeouts: timeouts,
 		SendBuffer: opts.sendBuffer,

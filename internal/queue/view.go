@@ -94,9 +94,15 @@ func view(j engine.JobSnapshot) JobView {
 		v.CanPause, v.CanCancel = !finalizing, true
 	case engine.JobPausing:
 		v.Reason = "Pausing."
+		if j.PauseReason != "" {
+			v.Reason = j.PauseReason
+		}
 		v.CanCancel = true
 	case engine.JobPaused:
 		v.Reason = "Paused."
+		if j.PauseReason != "" {
+			v.Reason = j.PauseReason
+		}
 		v.CanResume, v.CanCancel = true, true
 	case engine.JobCredentialWait:
 		v.Reason = "Waiting for credentials for " + j.Spec.Ref.Profile + ". Sign in again and load the credentials again, and the transfer continues from where it stopped."

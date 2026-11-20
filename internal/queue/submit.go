@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -361,10 +362,27 @@ func (s *Service) SubmitDownloads(ctx context.Context, req DownloadRequest) (Sub
 		return SubmitResult{}, err
 	}
 	ref := engine.ObjectRef{Profile: req.ProfileID, Region: region, Bucket: req.Bucket}
+	// Requests are placed one at a time, so two of them cannot both claim a
+	// destination. This lock is not Service.mu, which the observer takes.
+	s.placeMu.Lock()
+	defer s.placeMu.Unlock()
+	busy, err := s.unfinishedDownloads(ctx)
+	if err != nil {
+		return SubmitResult{}, describe(err)
+	}
 	submit := func(key, dest string) (engine.JobID, error) {
+		claim := destinationKey(dest)
+		if _, taken := busy[claim]; taken {
+			return "", &fsx.PathError{Code: fsx.CodeExists, Msg: fmt.Sprintf(
+				"%s is already the destination of a download in the queue. Wait for it, or remove it from the queue first", dest)}
+		}
 		r := ref
 		r.Key = key
-		return s.eng.Submit(ctx, engine.JobSpec{Direction: engine.Download, Ref: r, LocalPath: dest})
+		id, err := s.eng.Submit(ctx, engine.JobSpec{Direction: engine.Download, Ref: r, LocalPath: dest})
+		if err == nil {
+			busy[claim] = struct{}{}
+		}
+		return id, err
 	}
 	list := func(ctx context.Context, prefix string, fn func(key string, size int64) error) error {
 		return s.listObjects(ctx, ref, prefix, fn)
@@ -422,12 +440,50 @@ func downloadKey(ctx context.Context, item *SubmitItem, placer *fsx.Placer, key 
 		if errors.Is(err, engine.ErrEngineClosed) {
 			return err
 		}
-		item.fail(CodeStopped, "%v", err)
+		item.fail(submitCode(err), "%v", err)
 		return nil
 	}
 	item.Examined = 1
 	item.queued(id)
 	return nil
+}
+
+// submitCode is the refusal code of a failed submit: a PathError's own code,
+// such as CodeExists for a destination another download already has, or
+// CodeStopped.
+func submitCode(err error) string {
+	if code := fsx.CodeOf(err); code != "" {
+		return code
+	}
+	return CodeStopped
+}
+
+// unfinishedDownloads returns the destinations of the downloads the engine
+// still holds that have not completed or been cancelled. A failed one counts,
+// because Retry would write to it again.
+func (s *Service) unfinishedDownloads(ctx context.Context) (map[string]struct{}, error) {
+	jobs, err := s.eng.Snapshot(ctx)
+	if err != nil {
+		return nil, err
+	}
+	busy := make(map[string]struct{})
+	for _, j := range jobs {
+		if j.Spec.Direction != engine.Download || j.State == engine.JobCompleted || j.State == engine.JobCancelled {
+			continue
+		}
+		busy[destinationKey(j.Spec.LocalPath)] = struct{}{}
+	}
+	return busy, nil
+}
+
+// destinationKey compares paths the way the file system does: ignoring case on
+// Windows and macOS.
+func destinationKey(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "linux" {
+		return path
+	}
+	return strings.ToLower(path)
 }
 
 // checkNames applies the Windows name rules to every name of a key, so a key

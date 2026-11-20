@@ -19,6 +19,7 @@ import (
 	"s4browser/internal/creds"
 	"s4browser/internal/engine"
 	"s4browser/internal/fakes3"
+	"s4browser/internal/fsx"
 	"s4browser/internal/journal"
 	"s4browser/internal/queue"
 )
@@ -1082,11 +1083,26 @@ func TestSubmitValidation(t *testing.T) {
 	}
 
 	for name, call := range map[string]func() error{
-		"no profile":      func() error { _, e := r.app.QueueUploads(queue.UploadRequest{Bucket: "b", Region: "r", Paths: []string{good}}); return e },
-		"no bucket":       func() error { _, e := r.app.QueueUploads(queue.UploadRequest{ProfileID: tProfile, Region: "r", Paths: []string{good}}); return e },
-		"unknown region":  func() error { _, e := r.app.QueueUploads(queue.UploadRequest{ProfileID: tProfile, Bucket: "b", Paths: []string{good}}); return e },
-		"missing folder":  func() error { _, e := r.app.QueueDownloads(queue.DownloadRequest{ProfileID: tProfile, Bucket: "b", Region: "r", Keys: []string{"k"}, DestDir: filepath.Join(dest, "nope")}); return e },
-		"relative folder": func() error { _, e := r.app.QueueDownloads(queue.DownloadRequest{ProfileID: tProfile, Bucket: "b", Region: "r", Keys: []string{"k"}, DestDir: "out"}); return e },
+		"no profile": func() error {
+			_, e := r.app.QueueUploads(queue.UploadRequest{Bucket: "b", Region: "r", Paths: []string{good}})
+			return e
+		},
+		"no bucket": func() error {
+			_, e := r.app.QueueUploads(queue.UploadRequest{ProfileID: tProfile, Region: "r", Paths: []string{good}})
+			return e
+		},
+		"unknown region": func() error {
+			_, e := r.app.QueueUploads(queue.UploadRequest{ProfileID: tProfile, Bucket: "b", Paths: []string{good}})
+			return e
+		},
+		"missing folder": func() error {
+			_, e := r.app.QueueDownloads(queue.DownloadRequest{ProfileID: tProfile, Bucket: "b", Region: "r", Keys: []string{"k"}, DestDir: filepath.Join(dest, "nope")})
+			return e
+		},
+		"relative folder": func() error {
+			_, e := r.app.QueueDownloads(queue.DownloadRequest{ProfileID: tProfile, Bucket: "b", Region: "r", Keys: []string{"k"}, DestDir: "out"})
+			return e
+		},
 	} {
 		if call() == nil {
 			t.Errorf("%s: no error", name)
@@ -1112,5 +1128,39 @@ func TestCloseWithRunningJobsLeavesNothing(t *testing.T) {
 	}
 	if _, err := r.app.QueueJobs(); err == nil {
 		t.Fatal("a closed queue listed jobs")
+	}
+}
+
+// TestSecondDownloadToSameDestinationIsRefused is review finding F6: a second
+// request for a destination an unfinished download already has is refused at
+// once, ignoring case, instead of downloading everything and failing at the end.
+func TestSecondDownloadToSameDestinationIsRefused(t *testing.T) {
+	r := newRig(t, rigOptions{})
+	key := tPrefix + "clip.bin"
+	if err := r.server.PutSynthetic(fakes3.DefaultBucket, key, tSeed, tSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.server.PutSynthetic(fakes3.DefaultBucket, tPrefix+"other/CLIP.bin", tSeed, tSize); err != nil {
+		t.Fatal(err)
+	}
+	r.server.AddRule(fakes3.Rule{Op: fakes3.OpGet, Key: key, Fault: fakes3.SlowBody(4 << 20)})
+	dest := t.TempDir()
+	first := r.download(dest, key)[0]
+
+	for _, k := range []string{key, tPrefix + "other/CLIP.bin"} {
+		res, err := r.app.QueueDownloads(queue.DownloadRequest{ProfileID: tProfile, Bucket: fakes3.DefaultBucket, Region: fakes3.Region,
+			Keys: []string{k}, DestDir: dest})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if it := res.Items[0]; it.JobID != "" || it.Code != fsx.CodeExists || !strings.Contains(it.Error, "already the destination") {
+			t.Fatalf("%s: %+v", it.Source, it)
+		}
+	}
+	r.server.ClearRules()
+	r.waitState(first, "completed")
+	assertFile(t, filepath.Join(dest, "clip.bin"), tSeed, tSize)
+	if entries, _ := os.ReadDir(dest); len(entries) != 1 {
+		t.Fatalf("the folder holds %d entries", len(entries))
 	}
 }

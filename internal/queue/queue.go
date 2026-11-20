@@ -80,6 +80,9 @@ type Service struct {
 	clients s3x.ClientFunc
 	// setMu makes SetSettings (save, then apply) one step.
 	setMu sync.Mutex
+	// placeMu makes placing a download request, from reading the queue's
+	// destinations to submitting, one step. It is never held with mu.
+	placeMu sync.Mutex
 
 	uploadsOff string // Why uploads are disabled. Empty means enabled.
 

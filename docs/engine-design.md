@@ -29,7 +29,7 @@ The tables are code: `NextJobState` and `NextPartState` in `internal/engine/stat
 | `running` | yes | Dispatching work |
 | `pausing` | yes | Attempts cancelled, waiting for them to exit |
 | `paused` | no | Nothing in flight. Part table, upload ID and open handles are kept |
-| `credential-wait` | yes | No new dispatch. Waiting for a probe to pass |
+| `credential-wait` | yes, not counted | No new dispatch. Waiting for a probe to pass. The slot is kept but does not count against `MaxActiveFiles` (stage 4.2, F7) |
 | `cancelling` | yes | Draining, then cleaning up |
 | `failing` | yes | Same as `cancelling`, caused by a fatal error |
 | `cancelled`, `completed` | no | Terminal |
@@ -39,11 +39,11 @@ The tables are code: `NextJobState` and `NextPartState` in `internal/engine/stat
 
 | From | Event | To | Trigger |
 |---|---|---|---|
-| queued | Admit | running | Scheduler grants a slot, FIFO |
+| queued | Admit | running | Scheduler grants a slot, FIFO. A job whose profile has jobs in `credential-wait` is set aside in order until the wait ends |
 | queued | Pause | paused | User |
 | queued | Cancel | cancelling | User or engine close |
-| running | Pause | pausing | User, not allowed in `PhaseFinalizing` |
-| running | Cancel | cancelling | User or engine close, deferred in `PhaseFinalizing` |
+| running | Pause | pausing | User, not allowed in `PhaseFinalizing`. Also the engine, when a download write finds the drive full (`PauseReason`) |
+| running | Cancel | cancelling | User or engine close, deferred in `PhaseFinalizing` while a request is in flight |
 | running | CredentialError | credential-wait | Any request on the profile returns `ClassCredential` |
 | running | Fatal | failing | `ClassPermanent`, or retry budget exhausted |
 | running | Finished | completed | Object complete and durable |
@@ -63,7 +63,9 @@ The tables are code: `NextJobState` and `NextPartState` in `internal/engine/stat
 
 Commands rejected by the table return `ErrIllegalState`. Asynchronous events rejected by the table are ignored, because they can race with a command that already moved the job.
 
-**Finalizing:** during `PhaseFinalizing`, Pause returns `ErrIllegalState`. Cancel sets a flag and returns. If finalizing succeeds the job is `completed`, otherwise the flag sends it to `cancelling`.
+**Finalizing:** during `PhaseFinalizing`, Pause returns `ErrIllegalState`. While a request is in flight (verifying the source, Complete, Head, commit), or once the object or file is in place, Cancel sets a flag and returns. If finalizing succeeds the job is `completed`. Otherwise, and before the next finalizing request is sent (the first Complete or a retry), the flag sends it to `cancelling`. Between requests, such as during a Complete backoff, Cancel applies at once (stage 4.2, F4). A Complete that failed retryably may still have succeeded, so a cancel there can leave the object in place: the abort then finds `NoSuchUpload`.
+
+**Slots and credentials (stage 4.2, F7):** a job in `credential-wait` keeps its slot, so it resumes at once, but admission counts only the other slotted jobs. Queued jobs of the waiting profile are set aside in order rather than admitted, and return to the front of the queue when no job of that profile waits any more (restored, paused or cancelled). After a wait ends, running jobs can exceed `MaxActiveFiles` until enough finish. `MaxActiveParts` still bounds the data path.
 
 **Cleanup:** an upload aborts its multipart upload and deletes the journal entry. A download calls `SinkWriter.Abort` and deletes the journal entry. If the abort fails after `MaxAbortAttempts`, or hits a credential error, the job still ends. The journal entry stays, `JobSnapshot.Warning` says so, and the abort is retried at next launch.
 
@@ -246,6 +248,8 @@ delay   = max(ceiling * jitter, min(Retry-After, 30 s))
 
 A retryable failure fails the job only when **both** conditions hold: attempts reached the limit, and the job has finished no part for `OutageTolerance` (30 minutes). Below that, the part keeps retrying at the backoff ceiling. This stops a network outage from destroying a long transfer. The progress clock resets when the job enters `running`, so paused and credential-wait time does not count.
 
+A download attempt that wrote bytes before failing is progress, because the next attempt resumes after them: it resets that part's attempt count and the progress clock (stage 4.2, F5). An attempt that wrote nothing is charged as usual. Uploads cannot resume inside a part, so this applies only to downloads.
+
 ## 7. Upload path
 
 1. **Prepare:** `Source.Open`, record `SourceStat`, check `WriteGuard`, then call `PlanParts`.
@@ -295,7 +299,7 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 
 1. **Plan:** `HeadObject` records size and ETag. Then call `PlanParts`.
 2. **Journal:** when size is at least `JournalTempMinSize`, `Store.Put` a `KindDownloadTemp` entry using `fsx.TempPath`. This happens **before** the temp file exists.
-3. **Prepare:** `Sink.Prepare` checks free space and collisions, then creates the temp file. On failure, delete the journal entry.
+3. **Prepare:** `Sink.Prepare` checks free space and collisions, removes a leftover temp file of the same job (stage 4.2, F3), then creates the temp file. On failure, delete the journal entry.
 4. **Parts:** `GetObjectRange` with `Range: bytes=a-b` and `If-Match: <etag>`. Read into a pooled buffer, then `WriteAt`.
 5. **Commit:** `SinkWriter.Commit` syncs, closes and renames without replacing.
 6. **Journal delete:** `Store.Delete`.
@@ -310,9 +314,11 @@ store.UploadPart(ctx, engine.UploadPartRequest{Body: body, ContentLength: part.L
 
 **Local errors:** `Sink.Prepare` and `Commit` errors are wrapped in `ErrLocalIO`, which is permanent, unless they are cancellations. `ErrInsufficientSpace` and `ErrDestinationExists` stay matchable through the wrapper. A failed write is `ErrLocalIO` as well. A disk error is never retried.
 
+**Full drive (stage 4.2, F1):** a write that finds the drive or quota full (`ERROR_DISK_FULL`, `ERROR_HANDLE_DISK_FULL`, `ENOSPC`, `EDQUOT`) returns `ErrLocalIO` wrapping `ErrDiskFull`. The scheduler does not fail the job: it interrupts the part, pauses the job as a user Pause would, and sets `JobSnapshot.PauseReason` to `DiskFullNotice`. The temp file, its journal entry and the written bytes are kept. Resume clears the reason and continues where the download stopped. If the drive is still full, it pauses again. A full drive during `Commit` (sync or rename) still fails the job, because finalizing cannot pause.
+
 **Cleanup:** cancel and failure call `SinkWriter.Abort` with the same retry policy as an upload abort. If it still fails, `keepJournal` is set and `JobSnapshot.Warning` says so. An aborted job whose temp file is gone leaves no journal entry.
 
-**Free space:** `FileSink.Prepare` requires `size + FreeSpaceReserve` (64 MiB) free for the user on the volume (`fsx.FreeSpace`, quota-aware) and fails with `ErrInsufficientSpace` and a message that names the needed, reserved and available amounts. It runs before any bytes are fetched.
+**Free space:** `FileSink.Prepare` requires `size + FreeSpaceReserve` (64 MiB) plus the reservation of the volume free for the user (`fsx.FreeSpace`, quota-aware), and fails with `ErrInsufficientSpace` and a message that names the needed, reserved and available amounts. It runs before any bytes are fetched. The reservation (stage 4.2, F1) is the bytes every open temp file on the same volume (`fsx.VolumeOf`: the mount point on Windows, the device elsewhere) still has to write: size minus bytes written, or nothing for a file whose clusters were taken at Create (`fsx.Preallocator`: the preallocate and valid-data strategies on NTFS). Admission holds the sink's lock from the free-space read to the file's creation, so two downloads cannot count the same space. A file stops counting at Commit or at its first Abort. Free space taken by other programs is not predicted, which is what the full-drive pause covers.
 
 **Zero-byte objects** send no GET. Prepare and commit an empty file.
 
@@ -428,7 +434,7 @@ The wait has no time limit. The user can pause or cancel at any time. If a probe
 | `journal.lock` | Held exclusively for the process lifetime |
 | `journal.corrupt-<timestamp>.json` | A journal that failed to parse |
 
-**Format:** `{"version":1,"entries":[...]}`, written by `journal.Encode` and read by `journal.Decode`. Entries are small and few, because only active work is recorded.
+**Format:** `{"version":1,"entries":[...]}`, written by `journal.Encode` and read by `journal.Decode`. Entries are small and few, because only active work is recorded. `Decode` reads the version first, without strict fields, so a journal from a newer build returns `ErrUnsupportedVersion` and is left alone whatever new fields or kinds it holds. Only a version-1 file is decoded strictly (stage 4.2, F2).
 
 **Atomic write rule:** write the whole snapshot to `journal.json.tmp`, `fsync` it, close it, rename it over `journal.json` with write-through, then `fsync` the directory on Unix. `Put` and `Delete` return only after this finishes. Concurrent calls may share one snapshot write.
 

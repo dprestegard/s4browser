@@ -169,6 +169,14 @@ func (s *scheduler) partFailed(j *job, index int, class Class, err error) {
 		setPart(p, PartEvInterrupt)
 		j.returnPart(index)
 	}
+	if class == ClassPermanent && errors.Is(err, ErrDiskFull) {
+		// The written bytes and the temp file are kept, so the download goes on
+		// from here once space is freed.
+		interrupt()
+		s.pauseForDiskFull(j)
+		s.settle(j)
+		return
+	}
 	switch class {
 	case ClassCancelled:
 		interrupt()
@@ -199,6 +207,25 @@ func (s *scheduler) partFailed(j *job, index int, class Class, err error) {
 		s.schedule(wake{when: now.Add(s.retryDelay(int(p.attempts), err)), kind: wakePart, job: j, part: int32(index), epoch: j.epoch})
 	}
 	s.settle(j)
+}
+
+// DiskFullNotice is the job's warning while it is paused for a full drive.
+const DiskFullNotice = "Paused because the drive is full. Free some space, then resume: the download continues where it stopped."
+
+// pauseForDiskFull pauses a job whose write found the drive full, as a user
+// Pause would, and says why. A job that is already pausing, paused or ending is
+// left as it is.
+func (s *scheduler) pauseForDiskFull(j *job) {
+	if j.state != JobRunning && j.state != JobCredentialWait {
+		return
+	}
+	if !s.fire(j, JobEvPause) {
+		return
+	}
+	j.notice = DiskFullNotice
+	j.dirty = true
+	j.cancel(ErrJobPaused)
+	s.interruptBackoffs(j)
 }
 
 func (s *scheduler) retryDelay(attempt int, err error) time.Duration {
@@ -261,6 +288,12 @@ func (s *scheduler) controlFailed(j *job, class Class, err error) {
 // advance starts the job's current step.
 func (s *scheduler) advance(j *job) {
 	if j.control > 0 || j.ctlBackoff {
+		return
+	}
+	// A cancel that waited for a finalizing request applies before the next one
+	// is sent, unless the object or file is already in place.
+	if j.cancelRequested && j.phase == PhaseFinalizing && j.step < stepJournalDelete {
+		_ = s.applyCancel(j, ErrJobCancelled)
 		return
 	}
 	for {

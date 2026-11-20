@@ -464,3 +464,18 @@ func TestDownloadKeyEntryPoints(t *testing.T) {
 		t.Errorf("calls: %v", got)
 	}
 }
+
+// TestFolderDownloadKeepsSubmitRefusalCode: a file of a folder whose
+// destination another download has is refused with CodeExists (review F6).
+func TestFolderDownloadKeepsSubmitRefusalCode(t *testing.T) {
+	noLeak(t)
+	p, _ := destPlacer(t)
+	busy := &stub{err: &fsx.PathError{Code: fsx.CodeExists, Msg: "taken"}}
+	item := &SubmitItem{Kind: KindPrefix}
+	if err := expandPrefix(context.Background(), item, p, "y/", "y", listOf("y/a"), busy.submit); err != nil {
+		t.Fatal(err)
+	}
+	if len(item.Refused) != 1 || item.Refused[0].Code != fsx.CodeExists {
+		t.Fatalf("%+v", item)
+	}
+}

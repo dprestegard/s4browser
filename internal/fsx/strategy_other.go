@@ -3,6 +3,7 @@
 package fsx
 
 import (
+	"errors"
 	"fmt"
 
 	"golang.org/x/sys/unix"
@@ -40,6 +41,21 @@ func FreeSpace(dir string) (int64, error) {
 		return 0, err
 	}
 	return int64(st.Bavail) * int64(st.Bsize), nil
+}
+
+// isDiskFull matches ENOSPC and EDQUOT.
+func isDiskFull(err error) bool {
+	return errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT)
+}
+
+// VolumeOf names the filesystem holding dir by its device number. Downloads to
+// the same filesystem share its free space.
+func VolumeOf(dir string) (string, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(dir, &st); err != nil {
+		return "", err
+	}
+	return fmt.Sprint(st.Dev), nil
 }
 
 type linkFinalizer struct{}

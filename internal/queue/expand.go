@@ -240,7 +240,7 @@ func expandPrefix(ctx context.Context, item *SubmitItem, placer *fsx.Placer, pre
 			if errors.Is(err, engine.ErrEngineClosed) {
 				return err
 			}
-			item.refuse(key, CodeStopped, err.Error())
+			item.refuse(key, submitCode(err), err.Error())
 			return nil
 		}
 		item.queued(id)
