@@ -1,16 +1,29 @@
 import {formatBytes, formatDate, formatSize, formatStorageClass, plural} from '../ui/format';
 import {Location, Row, SelectionInfo, Snapshot} from '../types';
+import {ObjectExtras} from './ObjectExtras';
 
-// The right-hand panel. It shows what the listing already knows. Encryption,
-// checksums, tags and presigned links need extra requests and arrive in stage 3.1.
-export function Details({location, snapshot, selection}: {
+// The right-hand panel. It shows what the listing already knows, and for one
+// selected object also its metadata and tags, fetched from S3, and a button for
+// a download link.
+export function Details({profileId, location, snapshot, selection, onShare}: {
+    profileId: string;
     location: Location | null;
     snapshot: Snapshot | null;
     selection: SelectionInfo;
+    onShare: (key: string) => void;
 }) {
+    const one = selection.count === 1 ? selection.single : null;
     return (
         <aside className="details selectable" aria-label="Details">
-            {selection.count === 1 && selection.single ? <One row={selection.single} location={location}/>
+            {one ? (
+                <>
+                    <One row={one} location={location}/>
+                    {!one.folder && location && (
+                        <ObjectExtras key={`${profileId}|${location.bucket}|${one.key}`} profileId={profileId}
+                                      bucket={location.bucket} objectKey={one.key} onShare={() => onShare(one.key)}/>
+                    )}
+                </>
+            )
                 : selection.count > 0 ? <Many info={selection}/>
                     : <Folder location={location} snapshot={snapshot}/>}
         </aside>

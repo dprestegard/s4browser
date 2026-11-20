@@ -31,7 +31,13 @@ func TestTestPrefixGuard(t *testing.T) {
 		{"s4browser-test/run-42/a/../../escape", false},
 		{"s4browser-test/run-42/./file.bin", false},
 		{"s4browser-test/run-42//file.bin", false},
-		{"s4browser-test/run-42/dir/", false},
+		// A folder placeholder: one trailing slash, nothing unsafe before it.
+		{"s4browser-test/run-42/dir/", true},
+		{"s4browser-test/run-42/dir/sub/", true},
+		{"s4browser-test/run-42//", false},
+		{"s4browser-test/run-42/dir//", false},
+		{"s4browser-test/run-42/../", false},
+		{"s4browser-test/run-42/dir/./", false},
 		{`s4browser-test/run-42/..\..\escape`, false},
 		{"s4browser-test/run-42/nul\x00byte", false},
 	}

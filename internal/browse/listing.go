@@ -493,31 +493,62 @@ var ErrSelectionChanged = errors.New("the folder changed after the selection was
 // been made on this version of the listing: index ranges of an older version
 // can name other rows, so a different version is ErrSelectionChanged.
 func (s *Service) Keys(id string, spec SortSpec, version uint64, ranges [][2]int) ([]string, error) {
+	sel, err := s.Selection(id, spec, version, ranges)
+	if err != nil {
+		return nil, err
+	}
+	keys := make([]string, len(sel.Entries))
+	for i, e := range sel.Entries {
+		keys[i] = e.Key
+	}
+	return keys, nil
+}
+
+// Entry is one selected row.
+type Entry struct {
+	Key    string
+	Folder bool
+	Size   int64
+}
+
+// Selected is a resolved selection and the listing it was made in.
+type Selected struct {
+	Profile string
+	Bucket  string
+	Prefix  string
+	Region  string
+	Entries []Entry
+}
+
+// Selection resolves a selection like Keys, keeping whether each row is a
+// folder and the listing's profile, bucket and prefix.
+func (s *Service) Selection(id string, spec SortSpec, version uint64, ranges [][2]int) (Selected, error) {
 	switch spec.Field {
 	case SortName, SortSize, SortModified, SortClass:
 	case "":
 		spec.Field = SortName
 	default:
-		return nil, fmt.Errorf("unknown sort field %q", spec.Field)
+		return Selected{}, fmt.Errorf("unknown sort field %q", spec.Field)
 	}
 	l, err := s.listing(id)
 	if err != nil {
-		return nil, err
+		return Selected{}, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.version != version {
-		return nil, ErrSelectionChanged
+		return Selected{}, ErrSelectionChanged
 	}
+	out := Selected{Profile: l.profile, Bucket: l.bucket, Prefix: l.prefix, Region: l.region}
 	perm := l.viewLocked(spec)
-	var keys []string
 	last := -1
 	for _, r := range ranges {
 		from, to := max(r[0], 0, last+1), min(r[1], len(perm)-1)
 		for _, i := range perm[min(from, to+1) : max(to+1, from)] {
-			keys = append(keys, l.rows[i].key)
+			row := &l.rows[i]
+			out.Entries = append(out.Entries, Entry{Key: row.key, Folder: row.folder, Size: row.size})
 		}
 		last = max(last, to)
 	}
-	return keys, nil
+	return out, nil
 }

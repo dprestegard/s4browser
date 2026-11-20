@@ -319,6 +319,19 @@ func (s *Service) Region(ctx context.Context, profile, bucket string) (string, e
 	return r, nil
 }
 
+// BucketClient returns a client signed for the bucket's region, detecting the
+// region when it is not known yet. Its calls keep the SDK's standard retries.
+func (s *Service) BucketClient(ctx context.Context, profile, bucket string) (*s3.Client, error) {
+	if _, err := parseProfile(profile); err != nil {
+		return nil, err
+	}
+	region, err := s.Region(ctx, profile, bucket)
+	if err != nil {
+		return nil, err
+	}
+	return s.client(profile, region)
+}
+
 var (
 	// Lenient on purpose: buckets created in us-east-1 before 2018 may hold
 	// capitals and underscores. S3 itself rejects anything else.

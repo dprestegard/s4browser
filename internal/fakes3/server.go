@@ -233,12 +233,20 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		info.part = int32(n)
 	}
 
+	if err := s.checkPresigned(q); err != nil {
+		s.finish(w, r, err)
+		return
+	}
+	_, tagging := q["tagging"]
+
 	var err error
 	switch {
 	case bucketName == "":
 		err = s.serveService(ctx, w, r, info, q)
 	case key == "":
 		err = s.serveBucket(ctx, w, r, info, q, hasUploads)
+	case tagging:
+		err = s.serveTagging(ctx, w, r, info)
 	case r.Method == http.MethodPut && uploadID != "" && q.Get("partNumber") != "":
 		err = s.serveUploadPart(ctx, w, r, info)
 	case r.Method == http.MethodPut && r.Header.Get("x-amz-copy-source") != "":
@@ -482,7 +490,7 @@ func (s *Server) serveUploadPart(ctx context.Context, w http.ResponseWriter, r *
 
 func (s *Server) servePut(ctx context.Context, w http.ResponseWriter, r *http.Request, info reqInfo) error {
 	body, length, declared, _ := openBody(r)
-	out, err := s.core.putObject(ctx, putIn{info: info, body: body, contentLength: length, declared: declared})
+	out, err := s.core.putObject(ctx, putIn{info: info, body: body, contentLength: length, declared: declared, extra: extraFrom(r.Header)})
 	if err != nil {
 		return err
 	}
@@ -502,7 +510,7 @@ func (s *Server) serveCreate(ctx context.Context, w http.ResponseWriter, r *http
 	if t := strings.ToUpper(r.Header.Get("x-amz-checksum-type")); t != "" && t != "COMPOSITE" {
 		return s3err(http.StatusBadRequest, "InvalidRequest", "fakes3 supports only the COMPOSITE checksum type for multipart uploads")
 	}
-	id, err := s.core.createUpload(ctx, createIn{info: info, crcRequired: algo == "CRC32"})
+	id, err := s.core.createUpload(ctx, createIn{info: info, crcRequired: algo == "CRC32", extra: extraFrom(r.Header)})
 	if err != nil {
 		return err
 	}
@@ -564,8 +572,16 @@ func (s *Server) serveBucket(ctx context.Context, w http.ResponseWriter, r *http
 	if r.Method == http.MethodGet && location {
 		return s.serveLocation(ctx, w, info)
 	}
+	_, versioning := q["versioning"]
+	_, del := q["delete"]
 	if err := s.checkRegion(w, r, info); err != nil {
 		return err
+	}
+	switch {
+	case r.Method == http.MethodGet && versioning:
+		return s.serveVersioning(ctx, w, info)
+	case r.Method == http.MethodPost && del:
+		return s.serveDeleteObjects(ctx, w, r, info)
 	}
 	switch {
 	case r.Method == http.MethodHead:
@@ -675,6 +691,7 @@ func setObjectHeaders(h http.Header, m objMeta, withChecksum bool) {
 	h.Set("Last-Modified", m.modified.UTC().Format(http.TimeFormat))
 	h.Set("Accept-Ranges", "bytes")
 	h.Set("Content-Type", "binary/octet-stream")
+	m.extra.writeHeaders(h)
 	if withChecksum && m.crc != "" {
 		h.Set("x-amz-checksum-crc32", m.crc)
 		if m.multipart {

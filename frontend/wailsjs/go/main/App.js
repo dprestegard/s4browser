@@ -22,6 +22,10 @@ export function CancelJob(arg1) {
   return window['go']['main']['App']['CancelJob'](arg1);
 }
 
+export function CancelObjectWork() {
+  return window['go']['main']['App']['CancelObjectWork']();
+}
+
 export function CheckProfile(arg1) {
   return window['go']['main']['App']['CheckProfile'](arg1);
 }
@@ -46,8 +50,16 @@ export function CloseListing(arg1) {
   return window['go']['main']['App']['CloseListing'](arg1);
 }
 
+export function CreateFolder(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['CreateFolder'](arg1, arg2, arg3, arg4);
+}
+
 export function DeleteProfile(arg1) {
   return window['go']['main']['App']['DeleteProfile'](arg1);
+}
+
+export function DiscardDelete(arg1) {
+  return window['go']['main']['App']['DiscardDelete'](arg1);
 }
 
 export function Info() {
@@ -62,6 +74,14 @@ export function ListingWindow(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ListingWindow'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function ObjectMetadata(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ObjectMetadata'](arg1, arg2, arg3);
+}
+
+export function ObjectTags(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ObjectTags'](arg1, arg2, arg3);
+}
+
 export function OpenListing(arg1, arg2, arg3) {
   return window['go']['main']['App']['OpenListing'](arg1, arg2, arg3);
 }
@@ -72,6 +92,14 @@ export function PauseAll() {
 
 export function PauseJob(arg1) {
   return window['go']['main']['App']['PauseJob'](arg1);
+}
+
+export function PrepareDelete(arg1) {
+  return window['go']['main']['App']['PrepareDelete'](arg1);
+}
+
+export function PresignObject(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['PresignObject'](arg1, arg2, arg3, arg4);
 }
 
 export function Profiles() {
@@ -108,6 +136,14 @@ export function ResumeJob(arg1) {
 
 export function RetryJob(arg1) {
   return window['go']['main']['App']['RetryJob'](arg1);
+}
+
+export function RunDelete(arg1) {
+  return window['go']['main']['App']['RunDelete'](arg1);
+}
+
+export function SaveObjectTags(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SaveObjectTags'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SelectProfile(arg1) {

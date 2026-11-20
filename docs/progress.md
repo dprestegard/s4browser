@@ -1161,7 +1161,7 @@ Stage 2.4 builds the queue UI on the bindings and events above, including the re
 
 ## Stage 2.4: queue UI, drag-in and transfer settings
 
-**Status:** done, committed. Full transfers work from the UI in `wails dev -tags devfake`: folder and file uploads, drops, selection downloads (folders included), pause, resume, cancel, cancel all, retry, clear and live settings. `wails build`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (engine, journal, fsx, s3x, fakes3, creds, queue, browse, `cmd/...`) and `tsc --noEmit` pass. No AWS calls were made and `~/.aws` was not read. No engine contract changed.
+**Status:** done, committed as `447ddea`. Full transfers work from the UI in `wails dev -tags devfake`: folder and file uploads, drops, selection downloads (folders included), pause, resume, cancel, cancel all, retry, clear and live settings. `wails build`, `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (engine, journal, fsx, s3x, fakes3, creds, queue, browse, `cmd/...`) and `tsc --noEmit` pass. No AWS calls were made and `~/.aws` was not read. No engine contract changed.
 
 ### What exists
 
@@ -1228,3 +1228,68 @@ Two layout bugs found this way were fixed: the settings dialog's right column ov
 ### Next
 
 Stage 3.1 (delete, create folder, presign, metadata view, tag editing) starts from this commit. It is not started here.
+
+## Stage 3.1: object operations
+
+**Status:** done, committed. Delete, create folder, presigned links, the metadata view and tag editing work against the fake S3 in Go tests and in `wails dev -tags devfake`. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (objects, fakes3, browse, engine), `tsc --noEmit` and `wails build` pass. No AWS calls were made and `~/.aws` was not read. No engine contract changed.
+
+### What exists
+
+| Area | Files |
+|---|---|
+| Delete plan and run, versioning check, create folder, presign, metadata, tags | `internal/objects/` (`delete.go`, `objects.go`) |
+| Bindings: `PrepareDelete`, `RunDelete`, `DiscardDelete`, `CancelObjectWork`, `CreateFolder`, `PresignObject`, `ObjectMetadata`, `ObjectTags`, `SaveObjectTags` | `objects_ui.go`, fields in `app.go` |
+| Selection with folder flags and the listing's bucket; a client for a bucket's region | `internal/browse/listing.go` (`Service.Selection`, `Keys` now uses it), `internal/browse/buckets.go` (`Service.BucketClient`) |
+| Fake S3: `DeleteObjects`, object tagging, `GetBucketVersioning`, stored headers and user metadata, presigned-URL expiry | `internal/fakes3/objects.go`, small changes in `core.go`, `server.go`, `fault.go` |
+| UI: delete, new folder and share-link dialogs; metadata and tags in the details panel | `frontend/src/shell/ObjectDialogs.tsx`, `ObjectExtras.tsx`, `Details.tsx`, `Browser.tsx`, `App.tsx` |
+| Tests | `internal/objects/objects_test.go`, `objects_ui_test.go` |
+
+### Behaviour
+
+- **Delete** (toolbar button or the Delete key) runs in two calls. `PrepareDelete` resolves the selection in Go and lists every object under each selected folder (no delimiter), stores the keys under a plan ID and returns counts, bytes, placeholders, 8 sample keys, the bucket's versioning state and how many unfinished transfers touch those keys. Nothing is deleted. The dialog shows the counts and samples, and wording for each versioning state: off ("cannot be undone"), on (delete markers, versions stay and cost), suspended, or unknown (with the reason). At 100 objects or more you must type `delete`. `RunDelete` deletes exactly the counted keys with `DeleteObjects` in batches of 1,000. A plan runs once and expires after 15 minutes. One delete is capped at 1,000,000 objects. Keys S3 refuses are listed (first 200, with an exact total). A failed request or Stop ends the run, and the keys not sent are counted. The listing reloads afterwards.
+- **New folder** writes the zero-byte `name/` placeholder. Names with slashes, leading or trailing spaces, `.`/`..`, control characters, or keys over 1,024 bytes are refused, both while typing and in Go. If anything already exists under `name/`, the request is refused.
+- **Share link** signs a GET for 15 min, 1 h, 12 h, 1 day or 7 days. The link lasts for the shortest of the requested time, 7 days and the credentials' remaining life. Credentials are fetched once and the URL is signed with exactly those, so the expiry shown is real. If the credentials expire within a minute, no link is signed. The dialog shows "Works until …", warns when the credentials shortened the link, and copies the link. The URL is never logged.
+- **Details panel**, for one object: Share link, metadata from `HeadObject` with checksum mode (content type, ETag, part count, checksum, encryption, version, cache and content headers, object lock, restore, user metadata), and tags. Both are fetched 250 ms after the selection settles. **Tag editing** replaces the whole set (empty removes them). S3's rules are checked in the page and in Go: at most 10 tags, key 1–128 and value up to 256 characters, allowed characters, no `aws:` keys, no duplicates. Before writing, Go reads the tags again. If they differ from the set that was edited, nothing is written and "Reload tags" is offered. Tagging never copies the object.
+- **Guard change:** `engine.TestPrefixGuard` now allows exactly one trailing slash, so folder placeholders such as `<prefix>reel/` can be written in the test prefix. `<prefix>/`, `//` and dot segments before a trailing slash are still refused (see `guard_test.go`). Before this stage a trailing slash was refused.
+
+### Evidence
+
+Go, against the HTTPS fake (`internal/objects`, `objects_ui_test.go`):
+
+- A folder of 2,500 objects plus nested folders and placeholders is counted exactly. `a/` does not reach `ab/`, and a file selected twice is counted once. It is deleted in 3 `DeleteObjects` calls, and only the unselected objects remain.
+- With the test-prefix guard: a key outside the prefix and a key failed by a rule are listed as `AccessDenied`. In a versioned bucket every delete reports a marker.
+- A batch refused as a whole stops after 1,000 deleted with 500 not tried. A cancelled context sends nothing. A delete over the cap is refused while counting.
+- Versioning off, suspended, on, and denied (unknown with the error).
+- Folder creation: unicode name, exists (folder or placeholder), the invalid names, and an object `taken` next to a new folder `taken/`.
+- Presign: a 1 h link downloads 4,096 bytes and gets 403 after the fake clock passes its expiry. 30 days is capped at 7. Credentials expiring in 20 min give a credential-limited link carrying their session token. Credentials with 30 s left are refused, and so is a 1 s link.
+- `HeadObject` returns content type, cache control, user metadata, tag count, CRC32 and storage class.
+- Tags on a 6 TiB object: set, stale edit refused, cleared, with no PUT or multipart request. Each invalid tag set is refused before it is sent.
+- Through the bindings: preview counts, the result, progress events, a plan that runs once, a discarded plan, stale and other-bucket selections, the cap, and every other command. Writes outside the test prefix are denied.
+
+Hands-on, `wails dev -tags devfake` in the browser pane at 1440 × 900 and 1024 × 640:
+
+- Metadata and user metadata of a seeded object. A reserved tag key was flagged while typing. A new tag was saved and shown.
+- A 1 h link: the dialog said "59 min from now". The URL downloaded all 3 MiB with `curl`, and a variant two hours old got 403.
+- A "Reel 7" folder was created and appeared after the reload. "a/b" was flagged.
+- `Reel 7/` plus an 8 GiB file deleted with the Delete key ("versioning is off").
+- `dev-media/big/` (versioned): counted 100,040 objects with live progress, showed the delete-marker warning and asked for `delete`. Stopped partway: 69,000 deleted with 69,000 markers, 31,040 not deleted.
+
+One bug was found this way and fixed: a progress event arriving after `RunDelete` returned put the dialog back to "Deleting". Progress now updates only the step it was sent for.
+
+### Not verified
+
+- **No real S3.** Real `DeleteObjects` needs a checksum header, which the SDK adds and the fake ignores. Real presigned-URL expiry, real version IDs and markers, and tags on a real multipart object are for stage 4.3 (checks 9 and 10).
+- The built exe was not looked at. Dialogs were checked only in the dark theme.
+- Screen reader behaviour of the new dialogs and the tag editor.
+
+### Open risks
+
+- **A delete is a snapshot.** Objects added under a selected folder after counting are not deleted, and the confirmation does not re-count. An upload still running into the folder puts its object back. The confirmation warns when such transfers exist.
+- **A failed batch is reported as not tried**, but S3 may have applied part of it before failing. The next listing shows the truth.
+- **Tag writes are not atomic.** The re-read narrows the window but cannot close it, because S3 has no conditional tag write.
+- **Delete holds up to 1,000,000 keys in memory** (about 100 MB at worst) for up to 15 minutes until confirmed or discarded.
+- Deleting in a versioned bucket removes only the current version. There is no way to delete versions or markers, by design (the versioning UI is out of scope).
+
+### Next
+
+Stage 4.1 (independent review of engine, journal and path safety) starts from this commit. It is not started here.

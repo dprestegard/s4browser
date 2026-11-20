@@ -41,6 +41,8 @@ type object struct {
 	seed      uint64
 	seedKnown bool
 	changes   int
+	// extra holds the headers, user metadata and tags set by the client.
+	extra objExtra
 }
 
 type upload struct {
@@ -50,6 +52,7 @@ type upload struct {
 	created     time.Time
 	crcRequired bool
 	parts       map[int32]*uploadedPart
+	extra       objExtra
 }
 
 type uploadedPart struct {
@@ -64,6 +67,8 @@ type bucket struct {
 	uploads map[string]*upload
 	sorted  []string
 	dirty   bool
+	// versioning is "", "Enabled" or "Suspended", as GetBucketVersioning says.
+	versioning string
 }
 
 // reqInfo identifies one request for rules and the log.
@@ -315,6 +320,7 @@ func validKey(key string) *apiError {
 type createIn struct {
 	info        reqInfo
 	crcRequired bool
+	extra       objExtra
 }
 
 func (c *core) createUpload(ctx context.Context, in createIn) (id string, err error) {
@@ -333,7 +339,7 @@ func (c *core) createUpload(ctx context.Context, in createIn) (id string, err er
 		id = fmt.Sprintf("fake-upload-%06d", c.nextUpload)
 		b.uploads[id] = &upload{
 			id: id, key: in.info.key, seq: c.nextUpload, created: c.clock.Now(),
-			crcRequired: in.crcRequired, parts: make(map[int32]*uploadedPart),
+			crcRequired: in.crcRequired, parts: make(map[int32]*uploadedPart), extra: in.extra,
 		}
 		return nil
 	})
@@ -513,7 +519,7 @@ func (c *core) completeUpload(ctx context.Context, in completeIn) (out completeO
 		if cerr != nil {
 			return s3err(http.StatusInternalServerError, "InternalError", cerr.Error())
 		}
-		obj := &object{size: total, etag: multipartETag(metas), parts: metas, multipart: true, modified: c.clock.Now()}
+		obj := &object{size: total, etag: multipartETag(metas), parts: metas, multipart: true, modified: c.clock.Now(), extra: up.extra}
 		if up.crcRequired {
 			obj.crc = composite
 		}
@@ -558,6 +564,7 @@ type putIn struct {
 	body          io.Reader
 	contentLength int64
 	declared      func() string
+	extra         objExtra
 }
 
 func (c *core) putObject(ctx context.Context, in putIn) (out partOut, err error) {
@@ -592,7 +599,7 @@ func (c *core) putObject(ctx context.Context, in putIn) (out partOut, err error)
 		meta := partMeta{size: n, crc: sum, etag: partETag(sum, n)}
 		c.mu.Lock()
 		defer c.mu.Unlock()
-		b.putLocked(in.info.key, &object{size: n, etag: meta.etag, parts: []partMeta{meta}, crc: got, modified: c.clock.Now()})
+		b.putLocked(in.info.key, &object{size: n, etag: meta.etag, parts: []partMeta{meta}, crc: got, modified: c.clock.Now(), extra: in.extra})
 		out = partOut{etag: quote(meta.etag), crc: got}
 		return nil
 	})
@@ -608,10 +615,11 @@ type objMeta struct {
 	modified  time.Time
 	seed      uint64
 	seedKnown bool
+	extra     objExtra
 }
 
 func metaOf(o *object) objMeta {
-	return objMeta{size: o.size, etag: quote(o.etag), crc: o.crc, multipart: o.multipart, modified: o.modified, seed: o.seed, seedKnown: o.seedKnown}
+	return objMeta{size: o.size, etag: quote(o.etag), crc: o.crc, multipart: o.multipart, modified: o.modified, seed: o.seed, seedKnown: o.seedKnown, extra: o.extra.clone()}
 }
 
 func noSuchKey() *apiError {

@@ -230,3 +230,12 @@
 .dialog .field .input, .dialog .field .select { min-width: 0; }
 .refusal > span { min-width: 0; overflow-wrap: anywhere; }
 .menu-item.t-danger:not(:disabled) { color: var(--danger); }
+
+/* Object commands (stage 3.1) */
+.delete-sample { list-style: none; margin: 0; padding: 8px 10px; border-radius: 6px; background: var(--bg1); border: 1px solid var(--line);
+    font-size: var(--fs-label); line-height: 18px; display: flex; flex-direction: column; min-width: 0; max-height: 180px; overflow: auto; }
+.delete-sample li { min-width: 0; }
+.presign-url { resize: none; font-size: var(--fs-label); line-height: 18px; overflow-wrap: anywhere; word-break: break-all; min-width: 0; }
+.tag-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; gap: 6px; align-items: center; }
+.tag-row .input { min-width: 0; }
+.details section { border-top: 1px solid var(--line); padding-top: 12px; }

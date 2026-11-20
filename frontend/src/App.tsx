@@ -10,6 +10,7 @@ import {Browser} from './shell/Browser';
 import {Details} from './shell/Details';
 import {LastSubmit, TransferDock} from './shell/TransferDock';
 import {capSummary} from './shell/SettingsDialog';
+import {DeleteDialog, NewFolderDialog, PresignDialog} from './shell/ObjectDialogs';
 import {Splitter} from './ui/Splitter';
 import {Dialog} from './ui/overlay';
 import {Icon} from './ui/Icon';
@@ -47,6 +48,10 @@ export default function App() {
     const [notice, setNotice] = useState('');
     const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
     const [fresh, setFresh] = useState(0);
+    const [refresh, setRefresh] = useState(0);
+    const [newFolder, setNewFolder] = useState<Location | null>(null);
+    const [deleting, setDeleting] = useState<{at: Location; sel: SelectionRequest} | null>(null);
+    const [sharing, setSharing] = useState<{bucket: string; key: string} | null>(null);
     const locationRef = useRef(location);
     locationRef.current = location;
 
@@ -179,8 +184,11 @@ export default function App() {
                          canGoBack={history.length > 0} onBack={back}
                          onSnapshot={setSnapshot} onSelection={setSelection} density={density}
                          onUpload={pickUpload} onDownload={download}
-                         uploadBlocked={uploadBlocked} downloadBlocked={blocked} freshUploads={fresh}/>
-                {detailsOpen && <Details location={location} snapshot={snapshot} selection={selection}/>}
+                         uploadBlocked={uploadBlocked} downloadBlocked={blocked} freshUploads={fresh}
+                         onNewFolder={() => location && setNewFolder(location)}
+                         onDelete={(sel) => location && setDeleting({at: location, sel})} refresh={refresh}/>
+                {detailsOpen && <Details profileId={profileId} location={location} snapshot={snapshot} selection={selection}
+                                         onShare={(key) => location && setSharing({bucket: location.bucket, key})}/>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', minHeight: 0}}>
                 {dockOpen && (
@@ -190,6 +198,18 @@ export default function App() {
                               queue={queue} busy={busy} last={last} onDismissLast={() => setLast(null)}
                               notice={notice} onDismissNotice={() => setNotice('')}/>
             </div>
+            {newFolder && (
+                <NewFolderDialog profileId={profileId} bucket={newFolder.bucket} prefix={newFolder.prefix}
+                                 onClose={() => setNewFolder(null)}
+                                 onCreated={() => { setNewFolder(null); setRefresh((n) => n + 1); }}/>
+            )}
+            {deleting && (
+                <DeleteDialog profileId={profileId} bucket={deleting.at.bucket} sel={deleting.sel}
+                              onClose={() => setDeleting(null)} onDeleted={() => setRefresh((n) => n + 1)}/>
+            )}
+            {sharing && (
+                <PresignDialog profileId={profileId} bucket={sharing.bucket} objectKey={sharing.key} onClose={() => setSharing(null)}/>
+            )}
             {pendingDrop && (
                 <DropDialog drop={pendingDrop} blocked={uploadBlocked} onClose={() => setPendingDrop(null)} onUpload={() => {
                     const d = pendingDrop;

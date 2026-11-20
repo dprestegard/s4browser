@@ -32,12 +32,19 @@ const (
 	OpListBuckets  Op = "ListBuckets"
 	OpHeadBucket   Op = "HeadBucket"
 	OpLocation     Op = "GetBucketLocation"
+	// OpDeleteObjects is the batch delete. The guard checks each key in it, and
+	// a refused key is reported as that key's error.
+	OpDeleteObjects Op = "DeleteObjects"
+	OpGetTagging    Op = "GetObjectTagging"
+	OpPutTagging    Op = "PutObjectTagging"
+	OpDeleteTagging Op = "DeleteObjectTagging"
+	OpVersioning    Op = "GetBucketVersioning"
 )
 
 // mutating reports whether the write guard must approve op.
 func (o Op) mutating() bool {
 	switch o {
-	case OpCreateUpload, OpUploadPart, OpComplete, OpAbort, OpPut, OpDelete:
+	case OpCreateUpload, OpUploadPart, OpComplete, OpAbort, OpPut, OpDelete, OpPutTagging, OpDeleteTagging:
 		return true
 	}
 	return false

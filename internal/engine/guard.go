@@ -37,9 +37,11 @@ func NewTestPrefixGuard(runID string) (*TestPrefixGuard, error) {
 func (g *TestPrefixGuard) Prefix() string { return g.prefix }
 
 // CheckWrite allows only keys strictly below the run prefix whose path segments
-// are all non-empty and contain no dot-segments or backslashes.
+// are all non-empty and contain no dot-segments or backslashes. One trailing
+// slash is allowed, for a folder's placeholder object ("<prefix>reel/").
 func (g *TestPrefixGuard) CheckWrite(key string) error {
 	rest, ok := strings.CutPrefix(key, g.prefix)
+	rest = strings.TrimSuffix(rest, "/")
 	if !ok || rest == "" {
 		return fmt.Errorf("%w: key %q is outside %q", ErrWriteRefused, key, g.prefix)
 	}

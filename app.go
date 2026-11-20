@@ -32,6 +32,12 @@ type App struct {
 	// queue is nil if transfers could not start, and queueErr then says why.
 	queue    *queue.Service
 	queueErr string
+	// objects holds counted deletes and the cancel of the one running.
+	objects objectWork
+	// maxDelete caps one delete (objects.DefaultMaxDelete when 0); tests lower it.
+	maxDelete int
+	// emitHook, when set, receives events instead of the window. Tests set it.
+	emitHook func(event string, payload any)
 }
 
 // NewApp creates the App.

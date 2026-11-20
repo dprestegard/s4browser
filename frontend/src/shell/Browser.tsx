@@ -81,7 +81,8 @@ type Memory = {scroll: number; focus: number; ranges: Range[]; count: number; so
 type Restore = {scroll: boolean; sel: boolean; mem: Memory};
 
 export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, onSelection, density,
-                            onUpload, onDownload, uploadBlocked, downloadBlocked, freshUploads}: {
+                            onUpload, onDownload, uploadBlocked, downloadBlocked, freshUploads,
+                            onNewFolder, onDelete, refresh}: {
     profileId: string;
     location: Location | null;
     onNavigate: (prefix: string) => void;
@@ -99,6 +100,12 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     downloadBlocked: string;
     /** Uploads into this folder finished since it was listed. */
     freshUploads: number;
+    /** Opens the new folder dialog for the folder shown. */
+    onNewFolder: () => void;
+    /** Asks to delete the selection. */
+    onDelete: (sel: SelectionRequest) => void;
+    /** Changing it reloads the listing, after a delete or a new folder. */
+    refresh: number;
 }) {
     const [snap, setSnap] = useState<Snapshot | null>(null);
     const [sort, setSort] = useState<Sort>({field: 'name', desc: false});
@@ -220,7 +227,7 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         };
         // onSnapshot is a state setter from the parent
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profileId, bucket, prefix, reload]);
+    }, [profileId, bucket, prefix, reload, refresh]);
 
     useEffect(() => EventsOn('s4:listing', (s: Snapshot) => {
         if (s.id !== listingId.current) return;
@@ -388,6 +395,10 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                 select([[0, total - 1]]);
             }
         } else if (e.key === 'Escape') select(noRanges);
+        else if (e.key === 'Delete' && !mod && !e.shiftKey && selectionRequest()) {
+            e.preventDefault();
+            onDelete(selectionRequest()!);
+        }
     };
 
     const goUp = () => {
@@ -429,6 +440,14 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     }));
 
     const selCount = info.count;
+    // The selection as Go resolves it: index ranges of this listing version.
+    function selectionRequest(): SelectionRequest | null {
+        if (!snap || !current || info.count === 0 || ranges.length === 0) return null;
+        return {
+            listingId: snap.id, field: sort.field, desc: sort.desc, version: snap.version, ranges,
+            count: info.count, folders: info.folders, objects: info.objects, bytes: info.bytes,
+        };
+    }
     const dropStyle = (bucket ? {'--wails-drop-target': 'drop'} : {}) as CSSProperties;
     const focusRendered = total > 0 && items.some((v) => v.index === focus);
 
@@ -464,20 +483,20 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                     <Icon name="refresh"/>
                 </button>
                 <div className="vsep" style={{margin: '0 4px'}}/>
-                <button type="button" className="btn" disabled aria-label="New folder" title="Creating folders arrives in stage 3.1">
+                <button type="button" className="btn" disabled={!bucket || !snap} aria-label="New folder"
+                        title={bucket ? `Create a folder in ${bucket}/${prefix}` : 'Open a bucket first'} onClick={onNewFolder}>
                     <Icon name="folderPlus"/><span className="btn-label">New folder</span>
                 </button>
                 <button type="button" className="btn" disabled={!selCount || !!downloadBlocked || !snap}
                         aria-label={selCount ? `Download ${plural(selCount, 'selected item')}` : 'Download'}
                         title={downloadBlocked || (selCount ? `Download ${plural(selCount, 'selected item')} to a folder on this computer` : 'Select objects or folders to download')}
-                        onClick={() => snap && onDownload({
-                            listingId: snap.id, field: sort.field, desc: sort.desc, version: snap.version, ranges,
-                            count: info.count, folders: info.folders, objects: info.objects, bytes: info.bytes,
-                        })}>
+                        onClick={() => { const r = selectionRequest(); if (r) onDownload(r); }}>
                     <Icon name="download"/><span className="btn-label">Download</span>{selCount ? ` ${selCount.toLocaleString('en-US')}` : ''}
                 </button>
-                <button type="button" className="btn ghost icon-only danger-text" disabled
-                        aria-label={selCount ? `Delete ${plural(selCount, 'selected item')}` : 'Delete'} title="Deleting arrives in stage 3.1">
+                <button type="button" className="btn ghost icon-only danger-text" disabled={!selCount || !snap}
+                        aria-label={selCount ? `Delete ${plural(selCount, 'selected item')}` : 'Delete'}
+                        title={selCount ? `Delete ${plural(selCount, 'selected item')} (Delete)` : 'Select objects or folders to delete'}
+                        onClick={() => { const r = selectionRequest(); if (r) onDelete(r); }}>
                     <Icon name="trash"/>
                 </button>
                 <UploadMenu disabled={!bucket || !!uploadBlocked} title={uploadBlocked || (bucket ? `Upload to ${bucket}/${prefix}` : 'Open a bucket first')}

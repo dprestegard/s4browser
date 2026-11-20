@@ -76,6 +76,14 @@ func newDevFake() (*fakes3.Server, error) {
 		_ = fake.PutSynthetic("dev-small", fmt.Sprintf("downloads/sample%d.bin", i+1), uint64(i+1), size)
 		_ = fake.PutSynthetic("dev-media", fmt.Sprintf("samples/sample%d.bin", i+1), uint64(i+11), size)
 	}
+	// Object commands: dev-media keeps versions, so a delete there warns about
+	// delete markers; one sample carries headers, user metadata and tags.
+	_ = fake.SetVersioning("dev-media", "Enabled")
+	_ = fake.SetExtras("dev-small", "downloads/sample1.bin", fakes3.ObjectExtras{
+		Headers: map[string]string{"Content-Type": "application/octet-stream", "Cache-Control": "max-age=3600"},
+		Meta:    map[string]string{"camera": "A-cam", "shot-id": "042"},
+		Tags:    []fakes3.Tag{{Key: "project", Value: "Demo"}, {Key: "reel", Value: "1"}},
+	})
 	// S4_DEVFAKE_DENY_LIST=1 emulates a role that may not list buckets, so
 	// buckets must be added by name.
 	if os.Getenv("S4_DEVFAKE_DENY_LIST") != "" {

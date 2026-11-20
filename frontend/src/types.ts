@@ -150,3 +150,61 @@ export type SelectionRequest = {
     objects: number;
     bytes: number;
 };
+
+// Object commands (stage 3.1).
+export type DeletePreview = {
+    id: string;
+    bucket: string;
+    prefix: string;
+    objects: number;
+    bytes: number;
+    folders: number;
+    selected: number;
+    placeholders: number;
+    sample: string[] | null;
+    versioning: 'off' | 'enabled' | 'suspended' | 'unknown';
+    versioningError?: string;
+    transfers: number;
+};
+export type DeleteFailure = {key: string; code?: string; message: string};
+export type DeleteResult = {
+    requested: number;
+    deleted: number;
+    markers: number;
+    failed: DeleteFailure[] | null;
+    failedTotal: number;
+    notTried: number;
+    stopped?: string;
+};
+export type ObjectProgress = {phase: 'counting' | 'deleting'; done: number; total: number};
+export type Presigned = {
+    url: string;
+    expires: string;
+    requestedSeconds: number;
+    effectiveSeconds: number;
+    limitedBy?: 'maximum' | 'credentials';
+    credentialsExpire?: string;
+};
+export type ObjectMetadata = {
+    key: string;
+    size: number;
+    etag: string;
+    parts?: number;
+    lastModified?: string;
+    storageClass: string;
+    contentType?: string;
+    cacheControl?: string;
+    contentDisposition?: string;
+    contentEncoding?: string;
+    contentLanguage?: string;
+    expires?: string;
+    versionId?: string;
+    encryption?: string;
+    kmsKeyId?: string;
+    checksum?: string;
+    tagCount: number;
+    restore?: string;
+    objectLock?: string;
+    metadata: Record<string, string>;
+};
+export type Tag = {key: string; value: string};
