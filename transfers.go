@@ -12,9 +12,11 @@ import (
 	"s4browser/internal/queue"
 )
 
-// transferTimeout bounds a binding call that makes S3 requests, such as a region
-// lookup before a submit.
-const transferTimeout = 75 * time.Second
+// transferTimeout bounds a submit call. Expanding a folder of many files, or
+// listing a large prefix, can take minutes: files and objects already queued
+// when it ends stay queued and the result says where it stopped. The region
+// lookup has its own, shorter limit inside the queue.
+const transferTimeout = 30 * time.Minute
 
 // queueCloseTimeout is the time shutdown allows for stopping transfers. Engine
 // shutdown spends up to 10 s aborting uploads.

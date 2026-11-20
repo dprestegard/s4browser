@@ -485,6 +485,22 @@ export namespace queue {
 	        this.canRemove = source["canRemove"];
 	    }
 	}
+	export class Refusal {
+	    path: string;
+	    code: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Refusal(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.code = source["code"];
+	        this.reason = source["reason"];
+	    }
+	}
 	export class SettingsLimits {
 	    minParallelFiles: number;
 	    maxParallelFiles: number;
@@ -609,8 +625,17 @@ export namespace queue {
 	}
 	export class SubmitItem {
 	    source: string;
+	    kind: string;
 	    jobId?: string;
 	    error?: string;
+	    code?: string;
+	    queued: number;
+	    jobIds?: string[];
+	    refused?: Refusal[];
+	    refusedTotal: number;
+	    examined: number;
+	    emptyFolders?: number;
+	    placeholders?: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new SubmitItem(source);
@@ -619,9 +644,36 @@ export namespace queue {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.source = source["source"];
+	        this.kind = source["kind"];
 	        this.jobId = source["jobId"];
 	        this.error = source["error"];
+	        this.code = source["code"];
+	        this.queued = source["queued"];
+	        this.jobIds = source["jobIds"];
+	        this.refused = this.convertValues(source["refused"], Refusal);
+	        this.refusedTotal = source["refusedTotal"];
+	        this.examined = source["examined"];
+	        this.emptyFolders = source["emptyFolders"];
+	        this.placeholders = source["placeholders"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SubmitResult {
 	    items: SubmitItem[];

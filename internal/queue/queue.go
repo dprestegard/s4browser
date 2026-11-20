@@ -76,6 +76,8 @@ type Service struct {
 	// fileStore is the journal when it is a file, for its warnings.
 	fileStore *journal.FileStore
 	settings  *settingsFile
+	// clients returns the S3 client for a profile and region, for listing.
+	clients s3x.ClientFunc
 	// setMu makes SetSettings (save, then apply) one step.
 	setMu sync.Mutex
 
@@ -136,6 +138,7 @@ func Open(o Options) (*Service, error) {
 	}
 
 	clients := s3x.NewClients(o.Provider, o.ClientOptions...)
+	s.clients = clients
 	if s.fileStore != nil {
 		var cleaner journal.RemoteCleaner = s3x.NewCleaner(clients)
 		if o.WrapCleaner != nil {

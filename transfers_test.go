@@ -1052,9 +1052,13 @@ func TestSubmitValidation(t *testing.T) {
 	if len(res.Items) != 4 || res.Items[0].JobID == "" || res.Items[0].Error != "" || res.Queued() != 1 {
 		t.Fatalf("items: %+v", res.Items)
 	}
-	for i, want := range []string{"folders", "cannot read", "not absolute"} {
-		if it := res.Items[i+1]; it.JobID != "" || !strings.Contains(it.Error, want) {
-			t.Fatalf("item %d: %+v, want an error with %q", i+1, it, want)
+	// An empty folder is expanded to nothing: no job, no error, counted.
+	if it := res.Items[1]; it.Kind != queue.KindFolder || it.Queued != 0 || it.Error != "" || it.EmptyFolders != 1 || it.RefusedTotal != 0 {
+		t.Fatalf("empty folder: %+v", it)
+	}
+	for i, want := range []string{"cannot read", "not absolute"} {
+		if it := res.Items[i+2]; it.JobID != "" || !strings.Contains(it.Error, want) {
+			t.Fatalf("item %d: %+v, want an error with %q", i+2, it, want)
 		}
 	}
 	r.waitState(res.Items[0].JobID, "completed")
