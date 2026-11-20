@@ -1231,7 +1231,7 @@ Stage 3.1 (delete, create folder, presign, metadata view, tag editing) starts fr
 
 ## Stage 3.1: object operations
 
-**Status:** done, committed. Delete, create folder, presigned links, the metadata view and tag editing work against the fake S3 in Go tests and in `wails dev -tags devfake`. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (objects, fakes3, browse, engine), `tsc --noEmit` and `wails build` pass. No AWS calls were made and `~/.aws` was not read. No engine contract changed.
+**Status:** done, committed as `fdb02b8`. Delete, create folder, presigned links, the metadata view and tag editing work against the fake S3 in Go tests and in `wails dev -tags devfake`. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (objects, fakes3, browse, engine), `tsc --noEmit` and `wails build` pass. No AWS calls were made and `~/.aws` was not read. No engine contract changed.
 
 ### What exists
 
@@ -1293,3 +1293,31 @@ One bug was found this way and fixed: a progress event arriving after `RunDelete
 ### Next
 
 Stage 4.1 (independent review of engine, journal and path safety) starts from this commit. It is not started here.
+
+## Stage 4.1: independent review of engine, journal and path safety
+
+**Status:** done, not committed (waiting for the user's go-ahead). The findings are filed and ranked in `docs/review-4.1.md`. No code was changed. The review used the session's model (Opus 5.5), as the plan assigns.
+
+### Scope and method
+
+The source of `internal/engine`, `internal/journal` and `internal/fsx` was read in full against `docs/engine-design.md`, along with the parts of `internal/queue` (folder expansion, download placement, shutdown) and `internal/s3x` (`GetObjectRange`, `HeadObject`, error mapping) that feed them. Each finding names the file and lines, what happens, a fix and the test that should prove it. One finding (F2) was reproduced with a throwaway test, which was then deleted. The others were traced through the code.
+
+### Result
+
+| Severity | Findings |
+|---|---|
+| High | F1: free space is checked per job, so parallel large downloads can fill a drive, and each then fails and loses everything it downloaded |
+| Medium | F2: a journal from a newer build is moved aside as corrupt, orphaning its uploads (reproduced). F3: retrying a download whose temp file could not be removed always fails |
+| Low | F4: a cancel during finalizing is ignored before and between Complete tries. F5: mid-part download progress does not count against the retry budget. F6: two requests for the same destination are both queued. F7 (design): credential wait holds slots and blocks other profiles |
+| Info | F8 to F11: "cancelled" after a shutdown-time success, 8.3 short names, link check timing, no end-to-end download checksum |
+
+No path traversal, data race or deadlock was found. The review lists what was checked and found sound, and two rules later changes must keep: the progress observer must never call the engine, and queue code must not call the engine while it holds `Service.mu`.
+
+### For stage 4.2
+
+- F1 part 2 (a full disk keeps the job resumable) and F7 change engine contracts or the state table. The plan says those go to Opus. F1 part 1 (a reservation per volume), F2 to F6 and the optional F8 to F10 fit Sonnet.
+- Every finding has a test to write first.
+
+### Next
+
+Stage 4.2 (fix findings, run the full suite under the race detector) starts from this commit. It is not started here.
