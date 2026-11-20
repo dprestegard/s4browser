@@ -32,6 +32,8 @@ func main() {
 		Windows:          &windows.Options{Theme: windows.Dark},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
+		// Quitting cancels unfinished transfers, so it asks first.
+		OnBeforeClose: app.beforeClose,
 		// Native file drop: the window resolves dropped files and folders to
 		// absolute paths in Go. File data never crosses the UI bridge.
 		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},

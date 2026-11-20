@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -481,4 +482,42 @@ func (s *Service) Summarize(id string, spec SortSpec, ranges [][2]int) (Summary,
 		}
 	}
 	return out, nil
+}
+
+// ErrSelectionChanged means a selection was made on an earlier version of a
+// listing, so its index ranges may no longer name the same rows.
+var ErrSelectionChanged = errors.New("the folder changed after the selection was made; select the items again")
+
+// Keys returns the keys of the rows in the inclusive index ranges of the given
+// sort order, in that order. Folder keys end in "/". The selection must have
+// been made on this version of the listing: index ranges of an older version
+// can name other rows, so a different version is ErrSelectionChanged.
+func (s *Service) Keys(id string, spec SortSpec, version uint64, ranges [][2]int) ([]string, error) {
+	switch spec.Field {
+	case SortName, SortSize, SortModified, SortClass:
+	case "":
+		spec.Field = SortName
+	default:
+		return nil, fmt.Errorf("unknown sort field %q", spec.Field)
+	}
+	l, err := s.listing(id)
+	if err != nil {
+		return nil, err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.version != version {
+		return nil, ErrSelectionChanged
+	}
+	perm := l.viewLocked(spec)
+	var keys []string
+	last := -1
+	for _, r := range ranges {
+		from, to := max(r[0], 0, last+1), min(r[1], len(perm)-1)
+		for _, i := range perm[min(from, to+1) : max(to+1, from)] {
+			keys = append(keys, l.rows[i].key)
+		}
+		last = max(last, to)
+	}
+	return keys, nil
 }

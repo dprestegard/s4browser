@@ -26,6 +26,18 @@ export function CheckProfile(arg1) {
   return window['go']['main']['App']['CheckProfile'](arg1);
 }
 
+export function ChooseDownloadFolder(arg1) {
+  return window['go']['main']['App']['ChooseDownloadFolder'](arg1);
+}
+
+export function ChooseUploadFiles(arg1) {
+  return window['go']['main']['App']['ChooseUploadFiles'](arg1);
+}
+
+export function ChooseUploadFolder(arg1) {
+  return window['go']['main']['App']['ChooseUploadFolder'](arg1);
+}
+
 export function ClearFinished(arg1) {
   return window['go']['main']['App']['ClearFinished'](arg1);
 }
@@ -104,6 +116,14 @@ export function SelectProfile(arg1) {
 
 export function SetTransferSettings(arg1) {
   return window['go']['main']['App']['SetTransferSettings'](arg1);
+}
+
+export function StartDownloads(arg1) {
+  return window['go']['main']['App']['StartDownloads'](arg1);
+}
+
+export function StartUploads(arg1) {
+  return window['go']['main']['App']['StartUploads'](arg1);
 }
 
 export function TransferSettings() {

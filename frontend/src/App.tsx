@@ -1,14 +1,25 @@
-import {useCallback, useEffect, useState} from 'react';
+import {useCallback, useEffect, useRef, useState} from 'react';
 import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
+import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../wailsjs/go/main/App';
 import {Density, ThemeSetting, useAppliedTheme, useSetting} from './settings';
 import {useProfiles} from './shell/useProfiles';
+import {useQueue} from './shell/useQueue';
 import {TopBar} from './shell/TopBar';
 import {Sidebar} from './shell/Sidebar';
 import {Browser} from './shell/Browser';
 import {Details} from './shell/Details';
-import {TransferDock} from './shell/TransferDock';
+import {LastSubmit, TransferDock} from './shell/TransferDock';
+import {capSummary} from './shell/SettingsDialog';
 import {Splitter} from './ui/Splitter';
-import {Drop, Location, noSelection, SelectionInfo, Snapshot} from './types';
+import {Dialog} from './ui/overlay';
+import {Icon} from './ui/Icon';
+import {formatSize, plural} from './ui/format';
+import {Drop, DroppedItem, Location, noSelection, SelectionInfo, SelectionRequest, Snapshot, SubmitReport} from './types';
+
+type PendingDrop = {items: DroppedItem[]; target: Location};
+
+// The folder that holds a Windows path, for the next picker to open in.
+const parentOf = (p: string) => p.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '');
 
 // The app shell approved in stage 1.3: top bar, bucket sidebar, listing,
 // details panel and the transfer dock.
@@ -19,16 +30,25 @@ export default function App() {
     const [sidebarWidth, setSidebarWidth] = useSetting('sidebarWidth', 232);
     const [dockOpen, setDockOpen] = useSetting('dockOpen', true);
     const [dockHeight, setDockHeight] = useSetting('dockHeight', 200);
+    const [uploadDir, setUploadDir] = useSetting('lastUploadDir', '');
+    const [downloadDir, setDownloadDir] = useSetting('lastDownloadDir', '');
     useAppliedTheme(theme, density);
 
     const profiles = useProfiles();
     const profileId = profiles.state.activeId;
+    const queue = useQueue();
 
     const [location, setLocation] = useState<Location | null>(null);
     const [history, setHistory] = useState<Location[]>([]);
     const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
     const [selection, setSelection] = useState<SelectionInfo>(noSelection);
-    const [drops, setDrops] = useState<Drop[]>([]);
+    const [busy, setBusy] = useState('');
+    const [last, setLast] = useState<LastSubmit | null>(null);
+    const [notice, setNotice] = useState('');
+    const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
+    const [fresh, setFresh] = useState(0);
+    const locationRef = useRef(location);
+    locationRef.current = location;
 
     // A new profile starts with nothing open.
     useEffect(() => {
@@ -49,15 +69,98 @@ export default function App() {
         setLocation(prev);
     };
 
+    // A listing is a snapshot: count the uploads that finished into the folder on
+    // screen since it was listed, so the status bar can offer a reload.
+    const snapId = snapshot?.id ?? '';
+    useEffect(() => setFresh(0), [snapId, location?.bucket, location?.prefix]);
+    useEffect(() => queue.onChange((j, before, initial) => {
+        const here = locationRef.current;
+        if (initial || j.direction !== 'upload' || j.state !== 'completed' || before?.state === 'completed') return;
+        if (here && j.bucket === here.bucket && j.key.startsWith(here.prefix)) setFresh((n) => n + 1);
+    }), [queue.onChange]);
+
+    const report = (verb: 'upload' | 'download', rep: SubmitReport) => {
+        setLast({verb, report: rep, at: Date.now()});
+        queue.reload();
+    };
+
+    const fail = (what: string, err: unknown) => {
+        setNotice(`${what}: ${String(err).replace(/^Error: /, '')}`);
+        setDockOpen(true);
+    };
+
+    const upload = async (paths: string[], target: Location) => {
+        if (paths.length === 0) return;
+        setDockOpen(true);
+        setNotice('');
+        setBusy(`Adding ${plural(paths.length, 'item')} to the queue for ${target.bucket}/${target.prefix}… Large folders take a while to read.`);
+        try {
+            report('upload', await StartUploads({profileId, bucket: target.bucket, region: target.region ?? '', prefix: target.prefix, paths}) as SubmitReport);
+        } catch (err) {
+            fail('Nothing was uploaded', err);
+        } finally {
+            setBusy('');
+        }
+    };
+
+    const pickUpload = async (what: 'files' | 'folder') => {
+        const target = locationRef.current;
+        if (!target) return;
+        try {
+            const paths = (await (what === 'files' ? ChooseUploadFiles(uploadDir) : ChooseUploadFolder(uploadDir))) ?? [];
+            if (paths.length === 0) return;
+            setUploadDir(what === 'files' ? parentOf(paths[0]) : parentOf(paths[0]) || paths[0]);
+            await upload(paths, target);
+        } catch (err) {
+            fail('The file picker failed', err);
+        }
+    };
+
+    const download = async (sel: SelectionRequest) => {
+        const source = locationRef.current;
+        if (!source) return;
+        try {
+            const picked = (await ChooseDownloadFolder(downloadDir)) ?? [];
+            if (picked.length === 0) return;
+            const dest = picked[0];
+            setDownloadDir(dest);
+            setDockOpen(true);
+            setNotice('');
+            const what = sel.folders ? plural(sel.count, 'item') : `${plural(sel.objects, 'object')} (${formatSize(sel.bytes)})`;
+            setBusy(`Adding ${what} to the queue, into ${dest}…${sel.folders ? ' Folders are listed first.' : ''}`);
+            report('download', await StartDownloads({
+                profileId, bucket: source.bucket, region: source.region ?? '', listingId: sel.listingId,
+                field: sel.field, desc: sel.desc, version: sel.version, ranges: sel.ranges, destDir: dest,
+            } as never) as SubmitReport);
+        } catch (err) {
+            fail('Nothing was downloaded', err);
+        } finally {
+            setBusy('');
+        }
+    };
+
     // Dropped files arrive in Go as absolute paths; Go logs them and sends the
-    // paths (never file data) as "s4:drop". The drop target is the listing.
+    // paths (never file data) as "s4:drop". The drop target is the listing. A
+    // drop asks before uploading, because a stray drag is easy to make and an
+    // upload replaces objects with the same key.
     useEffect(() => {
         OnFileDrop(() => {}, true);
         return EventsOn('s4:drop', (d: Drop) => {
-            setDrops((old) => [d, ...old].slice(0, 50));
-            setDockOpen(true);
+            const target = locationRef.current;
+            if (!target) {
+                setNotice('Open a bucket, then drop files or folders on the listing to upload them there.');
+                setDockOpen(true);
+                return;
+            }
+            if (d.items.length > 0) setPendingDrop({items: d.items, target});
         });
     }, [setDockOpen]);
+
+    const status = queue.status;
+    const blocked = !status ? 'Transfers are starting…'
+        : !status.available ? `Transfers are not available: ${status.error ?? queue.error}`
+        : busy ? 'Wait until the current request is in the queue' : '';
+    const uploadBlocked = blocked || (status?.uploadsDisabled ? `Uploads are turned off: ${status.uploadsDisabledReason ?? ''}` : '');
 
     // Keep the dock from taking the whole window when the window shrinks.
     const maxDock = Math.max(140, Math.round(window.innerHeight * 0.5));
@@ -65,7 +168,8 @@ export default function App() {
     return (
         <div className="app">
             <TopBar profiles={profiles} theme={theme} setTheme={setTheme} density={density} setDensity={setDensity}
-                    detailsOpen={detailsOpen} toggleDetails={() => setDetailsOpen(!detailsOpen)}/>
+                    detailsOpen={detailsOpen} toggleDetails={() => setDetailsOpen(!detailsOpen)}
+                    bandwidth={capSummary(queue.settings?.current)}/>
             <div className="workspace">
                 <Sidebar profileId={profileId} current={location?.bucket ?? ''} width={sidebarWidth}
                          onOpen={(b) => go({bucket: b.name, prefix: '', region: b.region})}/>
@@ -73,7 +177,9 @@ export default function App() {
                 <Browser profileId={profileId} location={location}
                          onNavigate={(prefix) => location && go({...location, prefix})}
                          canGoBack={history.length > 0} onBack={back}
-                         onSnapshot={setSnapshot} onSelection={setSelection} density={density}/>
+                         onSnapshot={setSnapshot} onSelection={setSelection} density={density}
+                         onUpload={pickUpload} onDownload={download}
+                         uploadBlocked={uploadBlocked} downloadBlocked={blocked} freshUploads={fresh}/>
                 {detailsOpen && <Details location={location} snapshot={snapshot} selection={selection}/>}
             </div>
             <div style={{display: 'flex', flexDirection: 'column', minHeight: 0}}>
@@ -81,8 +187,49 @@ export default function App() {
                     <Splitter dir="h" value={dockHeight} min={120} max={maxDock} sign={-1} onChange={setDockHeight} label="Resize transfers"/>
                 )}
                 <TransferDock open={dockOpen} onToggle={() => setDockOpen(!dockOpen)} height={Math.min(dockHeight, maxDock)}
-                              drops={drops} onClearDrops={() => setDrops([])}/>
+                              queue={queue} busy={busy} last={last} onDismissLast={() => setLast(null)}
+                              notice={notice} onDismissNotice={() => setNotice('')}/>
             </div>
+            {pendingDrop && (
+                <DropDialog drop={pendingDrop} blocked={uploadBlocked} onClose={() => setPendingDrop(null)} onUpload={() => {
+                    const d = pendingDrop;
+                    setPendingDrop(null);
+                    void upload(d.items.map((it) => it.path), d.target);
+                }}/>
+            )}
         </div>
+    );
+}
+
+// Confirms a drop: what was dropped and where it goes.
+function DropDialog({drop, blocked, onClose, onUpload}: {drop: PendingDrop; blocked: string; onClose: () => void; onUpload: () => void}) {
+    const {items, target} = drop;
+    const shown = items.slice(0, 6);
+    const folders = items.filter((it) => it.kind === 'folder').length;
+    return (
+        <Dialog title={`Upload ${plural(items.length, 'item')}?`} onClose={onClose} width={520}>
+            <div className="stack">
+                {shown.map((it) => (
+                    <div key={it.path} style={{display: 'flex', alignItems: 'center', gap: 8, minWidth: 0}}>
+                        <Icon name={it.kind === 'folder' ? 'folder' : 'file'} className={it.kind === 'folder' ? 'folder-icon' : 'file-icon'}/>
+                        <span style={{flex: 'none', maxWidth: '50%'}} className="ellipsis" title={it.path}>{it.path.split(/[\\/]/).pop() || it.path}</span>
+                        <span className="ellipsis meta mono" title={it.path}>{parentOf(it.path)}</span>
+                        {it.error && <span className="chip warn">{it.kind === 'missing' ? 'Not found' : 'Cannot read'}</span>}
+                    </div>
+                ))}
+                {items.length > shown.length && <span className="meta">…and {plural(items.length - shown.length, 'more item')}</span>}
+            </div>
+            <p>
+                To <span className="mono" style={{color: 'var(--text)'}}>{target.bucket}/{target.prefix}</span>.
+                {folders > 0 ? ' Folders upload with everything inside them.' : ''} An object that already has the same key is replaced.
+            </p>
+            {blocked && <p className="meta t-warn" role="alert">{blocked}</p>}
+            <div className="actions">
+                <button type="button" className="btn" onClick={onClose}>Cancel</button>
+                <button type="button" className="btn primary" data-autofocus disabled={!!blocked} onClick={onUpload}>
+                    <Icon name="upload"/>Upload
+                </button>
+            </div>
+        </Dialog>
     );
 }

@@ -739,3 +739,39 @@ func TestSummarizeRanges(t *testing.T) {
 		t.Fatalf("inverted range counted %d", none.Count)
 	}
 }
+
+func TestSelectionKeys(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	for i := range 6 {
+		if err := e.fake.PutListed("east-bucket", fmt.Sprintf("sel/f%d.bin", i), int64((i*37)%11+1), time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := e.fake.PutListed("east-bucket", "sel/sub/x", 1, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	snap := e.wait(e.open("east-bucket", "sel/").ID)
+	spec := SortSpec{Field: SortSize, Desc: true}
+	rows := e.all(snap.ID, spec)
+	if len(rows) != 7 || !rows[0].Folder || rows[0].Key != "sel/sub/" {
+		t.Fatalf("rows = %+v, want the folder first", rows)
+	}
+	// Overlapping and out-of-order ranges name each row once, in order.
+	got, err := e.svc.Keys(snap.ID, spec, snap.Version, [][2]int{{0, 1}, {1, 2}, {5, 99}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{rows[0].Key, rows[1].Key, rows[2].Key, rows[5].Key, rows[6].Key}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("keys = %q, want %q", got, want)
+	}
+	if _, err := e.svc.Keys(snap.ID, spec, snap.Version+1, [][2]int{{0, 0}}); !errors.Is(err, ErrSelectionChanged) {
+		t.Fatalf("stale version: err = %v, want ErrSelectionChanged", err)
+	}
+	if _, err := e.svc.Keys(snap.ID, SortSpec{Field: "colour"}, snap.Version, [][2]int{{0, 0}}); err == nil {
+		t.Fatal("unknown sort field accepted")
+	}
+	if _, err := e.svc.Keys("nope", spec, 0, nil); !errors.Is(err, ErrListingNotFound) {
+		t.Fatalf("closed listing: err = %v", err)
+	}
+}

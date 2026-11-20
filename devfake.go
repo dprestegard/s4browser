@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,4 +132,16 @@ func devQueueOptions(o *queue.Options) error {
 	o.Subscribe = nil
 	o.ClientOptions = append(o.ClientOptions, devClientOptions(fake))
 	return nil
+}
+
+// devPick answers a picker from the environment when the variable for it is
+// set, so the UI can be driven by a script: S4_DEVFAKE_PICK_FILES (paths
+// separated by "|"), S4_DEVFAKE_PICK_FOLDER and S4_DEVFAKE_PICK_DEST.
+func devPick(kind pickKind) ([]string, bool) {
+	name := map[pickKind]string{pickFiles: "S4_DEVFAKE_PICK_FILES", pickFolder: "S4_DEVFAKE_PICK_FOLDER", pickDest: "S4_DEVFAKE_PICK_DEST"}[kind]
+	v := os.Getenv(name)
+	if v == "" {
+		return nil, false
+	}
+	return strings.Split(v, "|"), true
 }

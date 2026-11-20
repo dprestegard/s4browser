@@ -137,6 +137,22 @@ func (s *Service) Jobs(ctx context.Context) ([]JobView, error) {
 	return out, nil
 }
 
+// Unfinished counts the jobs that are not in a terminal state: queued, running,
+// paused or waiting. Closing the app cancels them.
+func (s *Service) Unfinished(ctx context.Context) (int, error) {
+	snaps, err := s.eng.Snapshot(ctx)
+	if err != nil {
+		return 0, describe(err)
+	}
+	n := 0
+	for _, j := range snaps {
+		if !j.State.IsTerminal() {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // Event is the batched progress event, "s4:queue". The engine produces at most
 // one batch per 200 ms, so the UI receives about 5 per second however many parts
 // are in flight. Merge Jobs into the list by ID. When Resync is true the engine

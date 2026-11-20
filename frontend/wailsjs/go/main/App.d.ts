@@ -16,6 +16,12 @@ export function CancelJob(arg1:string):Promise<void>;
 
 export function CheckProfile(arg1:string):Promise<main.ProfileCheck>;
 
+export function ChooseDownloadFolder(arg1:string):Promise<Array<string>>;
+
+export function ChooseUploadFiles(arg1:string):Promise<Array<string>>;
+
+export function ChooseUploadFolder(arg1:string):Promise<Array<string>>;
+
 export function ClearFinished(arg1:boolean):Promise<number>;
 
 export function CloseListing(arg1:string):Promise<void>;
@@ -55,6 +61,10 @@ export function RetryJob(arg1:string):Promise<void>;
 export function SelectProfile(arg1:string):Promise<void>;
 
 export function SetTransferSettings(arg1:queue.TransferSettings):Promise<queue.SettingsState>;
+
+export function StartDownloads(arg1:main.DownloadSelection):Promise<queue.SubmitReport>;
+
+export function StartUploads(arg1:queue.UploadRequest):Promise<queue.SubmitReport>;
 
 export function TransferSettings():Promise<queue.SettingsState>;
 

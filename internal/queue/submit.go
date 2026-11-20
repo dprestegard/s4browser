@@ -175,6 +175,51 @@ func (r SubmitResult) Refused() int {
 	return n
 }
 
+// SubmitReport is a SubmitResult in a size the UI can always take: the counts
+// are exact and the list is capped, however many paths, keys or files the
+// request held.
+type SubmitReport struct {
+	// Requested is the number of paths or keys in the request.
+	Requested int `json:"requested"`
+	// Queued is the number of jobs created.
+	Queued int `json:"queued"`
+	// Refused lists the first MaxListedRefusals refusals of the whole request. A
+	// requested path or key that failed as a whole is listed under its own name,
+	// and so is a folder that stopped early (its queued jobs remain).
+	Refused []Refusal `json:"refused"`
+	// RefusedTotal is the exact number of refusals, as SubmitResult.Refused.
+	RefusedTotal int `json:"refusedTotal"`
+	EmptyFolders int `json:"emptyFolders"`
+	Placeholders int `json:"placeholders"`
+	// Examined counts files and objects looked at.
+	Examined int `json:"examined"`
+}
+
+// Report condenses the result.
+func (r SubmitResult) Report() SubmitReport {
+	rep := SubmitReport{Requested: len(r.Items), Refused: []Refusal{}}
+	add := func(f Refusal) {
+		if len(rep.Refused) < MaxListedRefusals {
+			rep.Refused = append(rep.Refused, f)
+		}
+	}
+	for _, it := range r.Items {
+		rep.Queued += it.Queued
+		rep.EmptyFolders += it.EmptyFolders
+		rep.Placeholders += it.Placeholders
+		rep.Examined += it.Examined
+		rep.RefusedTotal += it.RefusedTotal
+		for _, f := range it.Refused {
+			add(f)
+		}
+		if it.Error != "" {
+			rep.RefusedTotal++
+			add(Refusal{Path: it.Source, Code: it.Code, Reason: it.Error})
+		}
+	}
+	return rep
+}
+
 // SubmitUploads queues one upload per file, expanding folders.
 func (s *Service) SubmitUploads(ctx context.Context, req UploadRequest) (SubmitResult, error) {
 	if s.uploadsOff != "" {

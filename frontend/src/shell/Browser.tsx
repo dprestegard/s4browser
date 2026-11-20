@@ -3,8 +3,9 @@ import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
 import {CloseListing, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Icon} from '../ui/Icon';
+import {useDismiss} from '../ui/overlay';
 import {formatDate, formatSize, formatStorageClass, plural} from '../ui/format';
-import {ListingWindow, Location, noSelection, Row, SelectionInfo, Snapshot, Sort, SortField} from '../types';
+import {ListingWindow, Location, noSelection, Row, SelectionInfo, SelectionRequest, Snapshot, Sort, SortField} from '../types';
 import {Density} from '../settings';
 
 // The table is virtualized: only the rows in view (plus a little overscan) exist
@@ -79,7 +80,8 @@ function readRowHeight(): number {
 type Memory = {scroll: number; focus: number; ranges: Range[]; count: number; sort: Sort};
 type Restore = {scroll: boolean; sel: boolean; mem: Memory};
 
-export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, onSelection, density}: {
+export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, onSelection, density,
+                            onUpload, onDownload, uploadBlocked, downloadBlocked, freshUploads}: {
     profileId: string;
     location: Location | null;
     onNavigate: (prefix: string) => void;
@@ -88,6 +90,15 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     onSnapshot: (s: Snapshot | null) => void;
     onSelection: (s: SelectionInfo) => void;
     density: Density;
+    /** Opens a picker and uploads into the folder shown. */
+    onUpload: (what: 'files' | 'folder') => void;
+    /** Downloads the selection. */
+    onDownload: (sel: SelectionRequest) => void;
+    /** Why uploading or downloading cannot start now, or ''. */
+    uploadBlocked: string;
+    downloadBlocked: string;
+    /** Uploads into this folder finished since it was listed. */
+    freshUploads: number;
 }) {
     const [snap, setSnap] = useState<Snapshot | null>(null);
     const [sort, setSort] = useState<Sort>({field: 'name', desc: false});
@@ -456,16 +467,21 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                 <button type="button" className="btn" disabled aria-label="New folder" title="Creating folders arrives in stage 3.1">
                     <Icon name="folderPlus"/><span className="btn-label">New folder</span>
                 </button>
-                <button type="button" className="btn" disabled aria-label={selCount ? `Download ${plural(selCount, "selected item")}` : "Download"} title="Downloading arrives in stage 2.4">
-                    <Icon name="download"/><span className="btn-label">Download</span>{selCount ? ` ${selCount}` : ''}
+                <button type="button" className="btn" disabled={!selCount || !!downloadBlocked || !snap}
+                        aria-label={selCount ? `Download ${plural(selCount, 'selected item')}` : 'Download'}
+                        title={downloadBlocked || (selCount ? `Download ${plural(selCount, 'selected item')} to a folder on this computer` : 'Select objects or folders to download')}
+                        onClick={() => snap && onDownload({
+                            listingId: snap.id, field: sort.field, desc: sort.desc, version: snap.version, ranges,
+                            count: info.count, folders: info.folders, objects: info.objects, bytes: info.bytes,
+                        })}>
+                    <Icon name="download"/><span className="btn-label">Download</span>{selCount ? ` ${selCount.toLocaleString('en-US')}` : ''}
                 </button>
                 <button type="button" className="btn ghost icon-only danger-text" disabled
                         aria-label={selCount ? `Delete ${plural(selCount, 'selected item')}` : 'Delete'} title="Deleting arrives in stage 3.1">
                     <Icon name="trash"/>
                 </button>
-                <button type="button" className="btn primary" disabled aria-label="Upload" title="Uploading arrives in stage 2.4">
-                    <Icon name="upload"/><span className="btn-label">Upload</span>
-                </button>
+                <UploadMenu disabled={!bucket || !!uploadBlocked} title={uploadBlocked || (bucket ? `Upload to ${bucket}/${prefix}` : 'Open a bucket first')}
+                            onUpload={onUpload}/>
             </div>
 
             <div className="listing-area" style={dropStyle} onKeyDown={onAreaKey}>
@@ -557,6 +573,12 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                     </>
                 )}
                 <div className="spacer"/>
+                {freshUploads > 0 && (
+                    <button type="button" className="btn ghost small" onClick={() => setReload((n) => n + 1)}
+                            title="The listing is a snapshot. Reload it to see the new objects.">
+                        <Icon name="refresh" size="sm"/>{plural(freshUploads, 'upload')} finished here · Reload
+                    </button>
+                )}
                 {selCount > 0 && (
                     <span className="strong">
                         {plural(selCount, 'selected item')}{info.objects ? ` · ${formatSize(info.bytes)}` : ''}
@@ -564,5 +586,36 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                 )}
             </div>
         </main>
+    );
+}
+
+// The Upload button: files or a folder, each through the native picker.
+function UploadMenu({disabled, title, onUpload}: {disabled: boolean; title: string; onUpload: (what: 'files' | 'folder') => void}) {
+    const [open, setOpen] = useState(false);
+    const btn = useRef<HTMLButtonElement>(null);
+    const menu = useRef<HTMLDivElement>(null);
+    useDismiss(open, () => setOpen(false), [btn, menu]);
+    const pick = (what: 'files' | 'folder') => {
+        setOpen(false);
+        onUpload(what);
+    };
+    return (
+        <div className="anchor">
+            <button ref={btn} type="button" className="btn primary" disabled={disabled} title={title}
+                    aria-haspopup="menu" aria-expanded={open} aria-label="Upload" onClick={() => setOpen((o) => !o)}>
+                <Icon name="upload"/><span className="btn-label">Upload</span><Icon name="chevronDown" size="xs"/>
+            </button>
+            {open && (
+                <div ref={menu} className="menu" role="menu" aria-label="Upload" style={{top: 32, right: 0, minWidth: 200}}>
+                    <button type="button" role="menuitem" className="menu-item" onClick={() => pick('files')}>
+                        <Icon name="file"/> Files…
+                    </button>
+                    <button type="button" role="menuitem" className="menu-item" onClick={() => pick('folder')}>
+                        <Icon name="folder"/> Folder…
+                    </button>
+                    <p className="meta" style={{padding: '4px 8px'}}>Or drop files and folders on the listing.</p>
+                </div>
+            )}
+        </div>
     );
 }

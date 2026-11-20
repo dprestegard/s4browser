@@ -6,7 +6,7 @@ import {Density, ThemeSetting} from '../settings';
 import {kindLabels} from '../types';
 import {Profiles} from './useProfiles';
 
-export function TopBar({profiles, theme, setTheme, density, setDensity, detailsOpen, toggleDetails}: {
+export function TopBar({profiles, theme, setTheme, density, setDensity, detailsOpen, toggleDetails, bandwidth}: {
     profiles: Profiles;
     theme: ThemeSetting;
     setTheme: (t: ThemeSetting) => void;
@@ -14,6 +14,7 @@ export function TopBar({profiles, theme, setTheme, density, setDensity, detailsO
     setDensity: (d: Density) => void;
     detailsOpen: boolean;
     toggleDetails: () => void;
+    bandwidth: string;
 }) {
     return (
         <header className="topbar">
@@ -24,7 +25,7 @@ export function TopBar({profiles, theme, setTheme, density, setDensity, detailsO
             <div className="vsep"/>
             <ProfileMenu profiles={profiles}/>
             <div className="spacer"/>
-            <span className="meta">Bandwidth: no cap</span>
+            <span className="meta" title="Set the caps in Transfer settings, in the transfers area">{bandwidth}</span>
             <ViewMenu theme={theme} setTheme={setTheme} density={density} setDensity={setDensity}/>
             <button type="button" className="btn ghost icon-only" onClick={toggleDetails}
                     aria-pressed={detailsOpen} aria-label={detailsOpen ? 'Hide details panel' : 'Show details panel'}

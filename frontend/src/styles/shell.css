@@ -173,14 +173,60 @@
 .qrow .qdetail { font-size: var(--fs-small); color: var(--text3); }
 .qrow .right { text-align: right; color: var(--text2); }
 .dock .empty { padding: 16px; }
+.qtable { position: relative; min-width: 900px; }
+.qrow.vrow { box-sizing: border-box; }
+.qrow .q-up { color: var(--accent); }
+.qrow .q-down { color: var(--ok); }
+.qprogress { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.qprogress .meta { font-size: var(--fs-label); line-height: var(--lh-label); }
+.qactions { display: flex; justify-content: flex-end; gap: 2px; }
+.qrow > [role="cell"]:nth-child(6) { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.bar > span.fill-neutral { background: var(--text3); }
+.bar > span.fill-warn { background: var(--warn); }
+.bar > span.fill-danger { background: var(--danger); }
+.bar > span.fill-ok { background: var(--ok); }
+.dock-line {
+    display: flex; align-items: center; gap: 8px; flex: none;
+    min-height: 34px; padding: 4px 12px 4px 16px; border-bottom: 1px solid var(--line);
+    font-size: var(--fs-small); color: var(--text2);
+}
+.dock-line.warn { background: var(--warn-weak); }
+.spinner {
+    width: 12px; height: 12px; flex: none; border-radius: 50%;
+    border: 2px solid var(--track); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2.4s; } }
+
+/* The refusal list in its dialog */
+.refusals {
+    max-height: 50vh; overflow: auto;
+    border: 1px solid var(--line); border-radius: var(--r-panel);
+}
+.refusal {
+    display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 12px;
+    padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: var(--fs-small);
+}
+.refusal:last-child { border-bottom: 0; }
+.refusal.head {
+    position: sticky; top: 0; background: var(--bg2);
+    color: var(--text3); font-weight: 600;
+}
 
 /* Narrow windows (down to the 1024 px minimum): the listing keeps its room. */
 @media (max-width: 1279px) {
     :root { --details-w: 260px; }
     .btn-label { display: none; }
     .pathbar .btn:not(.icon-only) { padding: 0 8px; }
+    .crumbs { min-width: 120px; }
     .cols { grid-template-columns: minmax(0, 1fr) 96px 136px 120px; }
     .table { min-width: 520px; }
     .statusbar .wide-only { display: none; }
     .qrow { grid-template-columns: 20px minmax(0, 1fr) 180px 72px 56px 150px 84px; min-width: 760px; }
 }
+.dialog .folder-icon { color: var(--accent); }
+.dialog .file-icon { color: var(--text3); }
+.dialog .field .input, .dialog .field .select { min-width: 0; }
+.refusal > span { min-width: 0; overflow-wrap: anywhere; }
+.menu-item.t-danger:not(:disabled) { color: var(--danger); }

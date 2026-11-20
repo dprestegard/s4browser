@@ -62,3 +62,91 @@ export const kindLabels: Record<string, string> = {
     other: 'Unsupported',
     none: 'No credentials',
 };
+
+// Transfers (internal/queue). JobView arrives in "s4:queue" events and from
+// QueueJobs; merge by id.
+export type JobState =
+    | 'queued' | 'running' | 'pausing' | 'paused' | 'credential-wait'
+    | 'cancelling' | 'failing' | 'cancelled' | 'failed' | 'completed';
+
+export type JobView = {
+    id: string;
+    direction: 'upload' | 'download';
+    profile: string;
+    bucket: string;
+    key: string;
+    localPath: string;
+    name: string;
+    state: JobState;
+    phase: 'preparing' | 'transferring' | 'finalizing';
+    totalBytes: number;
+    doneBytes: number;
+    bytesPerSec: number;
+    etaSeconds: number;
+    partsDone: number;
+    partsTotal: number;
+    retries: number;
+    reason?: string;
+    errorCode?: string;
+    detail?: string;
+    warning?: string;
+    finished: boolean;
+    canPause: boolean;
+    canResume: boolean;
+    canCancel: boolean;
+    canRetry: boolean;
+    canRemove: boolean;
+};
+
+export type QueueEvent = {seq: number; at: number; jobs: JobView[] | null; removed?: string[]; resync?: boolean};
+
+export type CleanupStatus = {running: boolean; finished: boolean; uploadsAborted: number; tempsRemoved: number; pending: number; error?: string};
+export type QueueStatus = {
+    available: boolean;
+    error?: string;
+    uploadsDisabled: boolean;
+    uploadsDisabledReason?: string;
+    warnings: string[] | null;
+    cleanup: CleanupStatus;
+};
+
+export type TransferSettings = {
+    parallelFiles: number;
+    partsPerFile: number;
+    totalParts: number;
+    partSize: number;
+    uploadBytesPerSec: number;
+    downloadBytesPerSec: number;
+};
+export type SettingsLimits = {
+    minParallelFiles: number; maxParallelFiles: number;
+    minPartsPerFile: number; maxPartsPerFile: number;
+    minTotalParts: number; maxTotalParts: number;
+    minPartSize: number; maxPartSize: number;
+};
+export type SettingsState = {current: TransferSettings; defaults: TransferSettings; limits: SettingsLimits};
+
+export type Refusal = {path: string; code: string; reason: string};
+export type SubmitReport = {
+    requested: number;
+    queued: number;
+    refused: Refusal[] | null;
+    refusedTotal: number;
+    emptyFolders: number;
+    placeholders: number;
+    examined: number;
+};
+
+// What the listing hands over when the user downloads its selection: index
+// ranges of one sort order of one listing version. Go resolves them to keys.
+export type SelectionRequest = {
+    listingId: string;
+    field: SortField;
+    desc: boolean;
+    version: number;
+    ranges: [number, number][];
+    count: number;
+    folders: number;
+    objects: number;
+    bytes: number;
+};
