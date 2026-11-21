@@ -1385,7 +1385,7 @@ Stage 4.3 (real AWS verification with your hands-on checks) starts from this com
 
 ## Stage 4.3: real AWS verification
 
-**Status:** done, not committed (waiting for the user's go-ahead). Every real-AWS and hands-on check in the plan's Verification list (7 to 11) passed on 2026-11-20. The user did the drag-in checks and started the uploads for the cancel, kill and credential checks. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (`cmd/...`, engine) pass on the new code.
+**Status:** done, committed as `9319b03`. Every real-AWS and hands-on check in the plan's Verification list (7 to 11) passed on 2026-11-20. The user did the drag-in checks and started the uploads for the cancel, kill and credential checks. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (`cmd/...`, engine) pass on the new code.
 
 ### Target
 
@@ -1460,3 +1460,50 @@ Two things seen are only artifacts of the test setup:
 ### Next
 
 Stage 4.4 (release build, README, deferred Mac checklist), or stage 4.5 first if the user wants R1 and R2 in the release. Neither is started here.
+
+## Stage 4.5: listing refresh and location kept across a reload
+
+**Status:** done, not committed (waiting for the user's go-ahead). It was done before stage 4.4, as the user chose. R1, R2 and the three smaller issues from stage 4.3 are fixed. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (browse, queue, journal, creds), `tsc --noEmit` and `wails build` pass. No AWS calls were made in this stage.
+
+### What changed
+
+| Item | Behaviour | Files |
+|---|---|---|
+| R1, refresh after upload | Uploads that finish into the folder on screen, or below it, reload its listing on their own. The first reload comes 1 s after the first finished upload, and later reloads at most every 5 s, so a folder upload of many files does not relist the folder per file. A folder of more than 20,000 rows keeps the "N uploads finished here · Reload" button instead, because relisting it is costly | `frontend/src/App.tsx` |
+| Reloads keep the view | Every reload of the folder on screen keeps the scroll position, and the selection and focused row on the same objects. That covers the Reload button, F5, a new folder, a delete and R1. Before the reload, the selected keys (up to 10,000) are read from Go, and afterwards they are located in the new listing by key. Rows added above them no longer shift the selection onto other objects, and deleted rows drop out of it. Before this stage, a reload kept the selection only when the row count was unchanged | `frontend/src/shell/Browser.tsx`, `internal/browse/listing.go` (`Service.Locate`, `MaxLocate`), `browse.go` (`ListingKeys`, `ListingLocate`) |
+| R2, location kept on reload | The profile, bucket and folder are kept in `sessionStorage`. A reload of the window (the WebView's right-click Refresh) returns to them once the profiles have loaded, if that profile is still the active one. A restart still opens with no bucket. F5 and Ctrl+R reload the folder's listing and no longer reload the page | `frontend/src/settings.ts`, `App.tsx`, `Browser.tsx` |
+| Bucket list after credentials return | Go sends `s4:credentials` whenever a profile's credentials change (keys added, "Load credentials again", and so on), and the sidebar reloads a failed list then. A failed list also retries 4 times, 15, 30, 60 and 120 s apart, for credentials that return without a change the app hears of. A role refused `ListBuckets` (`listDenied`) is not retried | `app.go` (`emit`), `frontend/src/shell/Sidebar.tsx` |
+| Deferred-cleanup warning | `journal.Report.Deferrals` holds the warning of each entry a pass left in the journal, by entry ID. The queue shows a deferral warning only while its entry is still pending, so "will be cleaned up when the credentials … work again" disappears once the cleanup has run. Other warnings, such as a path that was not a temp file, stay | `internal/journal/journal.go`, `recover.go`, `internal/queue/queue.go` |
+| Profile badge expiry | When the badge's expiry passes, the window asks `CurrentCredentials`, which reads the profile's credential cache without discarding good credentials or notifying anyone (`creds.Manager.Current`). A `credential_process` profile then shows the expiry of the credentials its helper gave last, rather than "expired" | `internal/creds/manager.go`, `profiles.go`, `frontend/src/shell/useProfiles.ts` |
+
+### Evidence
+
+- **Go tests:**
+  - `browse.TestLocateAfterReload`: keys selected before objects were added are found at their new indexes, in both sort directions. A missing key is -1, and more than `MaxLocate` keys are refused.
+  - `creds.TestCurrentDoesNotReload`: three `Current` calls run the helper once and tell no listener, and `Reload` runs it again and tells them.
+  - `TestLaunchCleanupResumesWhenCredentialsChange` now also checks the warnings. The deferral warning is shown while the cleanup waits and is gone after it ran, and the "not a temp file" warning stays.
+- **Hands-on** in `wails dev -tags devfake`, in the browser pane at 1440 × 900:
+  - In `dev-small/downloads`, `sample2.bin` and `sample3.bin` were selected, then `a.bin` and `b.bin` were uploaded. The listing reloaded on its own, showed the two new files above, and kept `sample2.bin` and `sample3.bin` selected, with the focus on `sample3.bin`.
+  - F5 reloaded the listing with the selection kept, and the page itself was not reloaded (a marker in `window` survived).
+  - A full page reload came back to `dev-small/downloads`.
+  - A folder upload (`shoot/`) made the new folder appear without a reload.
+
+### Not verified
+
+- **The native window:** F5, Ctrl+R and the right-click Refresh were tried only in the browser pane. Wails turns the WebView2 context menu off in production builds (its `EnableDefaultContextMenu` defaults to false), so the built exe should have no Refresh entry. Whether WebView2 lets the page cancel F5 was not checked.
+- **Real S3:** this stage was not run against it. Nothing here changes requests to S3, except the extra `ListBuckets` retries.
+- **Screen readers:** the focus restored after a reload was not checked with one.
+
+### Open risks
+
+- **The selection is not kept across a full page reload,** only the location. It is index ranges of a listing that the reload closes.
+- **Auto-reload relists the whole folder,** up to 20,000 rows, at most every 5 s while uploads finish into it. The 20,000 limit is a guess and was not measured on real S3.
+- **A deleted object's row drops out of the selection silently.** The delete dialog already said what was deleted.
+
+### Also
+
+The app's real profile store (`%AppData%\s4browser\profiles.json`) still has `aws:s4-credtest` active from stage 4.3. That profile exists only in the test AWS config, so a normal launch shows "No profile" until another profile is chosen.
+
+### Next
+
+Stage 4.4 (release build, README, deferred Mac checklist). It is not started here.

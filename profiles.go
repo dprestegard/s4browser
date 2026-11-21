@@ -85,6 +85,24 @@ func (a *App) DeleteProfile(id string) error {
 	return m.Delete(id)
 }
 
+// CurrentCredentials reports the credentials a profile's cache holds now,
+// loading them only if they are missing or expired, so a credential_process
+// profile's badge can follow the helper's newer credentials. It makes no AWS
+// request and tells no one.
+func (a *App) CurrentCredentials(id string) ProfileCheck {
+	m, err := a.profileManager()
+	if err != nil {
+		return ProfileCheck{Message: err.Error()}
+	}
+	ctx, cancel := context.WithTimeout(a.ctx, profileCheckTimeout)
+	defer cancel()
+	st, err := m.Current(ctx, id)
+	if err != nil {
+		return ProfileCheck{Message: err.Error()}
+	}
+	return ProfileCheck{OK: true, KeyHint: st.KeyHint, Expires: st.Expires}
+}
+
 // CheckProfile loads a profile's credentials again, running its helper if it has
 // one. It makes no AWS request. Success tells transfers waiting for this
 // profile's credentials to try again.

@@ -1,8 +1,12 @@
 import {FormEvent, useCallback, useEffect, useState} from 'react';
 import {AddBucket, Buckets, RemoveBucket} from '../../wailsjs/go/main/App';
+import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Icon} from '../ui/Icon';
 import {Dialog} from '../ui/overlay';
 import {Bucket, BucketList} from '../types';
+
+const RETRY_MS = 15_000;
+const RETRIES = 4;
 
 // The bucket list of the active profile, with buckets added by name merged in.
 export function Sidebar({profileId, current, onOpen, width}: {
@@ -31,6 +35,30 @@ export function Sidebar({profileId, current, onOpen, width}: {
         setNote('');
         load();
     }, [load]);
+
+    // A list that failed, for example while the profile's credentials were
+    // expired, loads again when the credentials change. It also tries again
+    // RETRIES times, RETRY_MS apart and doubling, because credentials can come
+    // back without a change the app hears of (a helper's next run). A refusal that
+    // lasts, such as a role without ListBuckets, stops costing requests after that.
+    useEffect(() => EventsOn('s4:credentials', (id: string) => {
+        if (id === profileId) void load();
+    }), [profileId, load]);
+    const failed = !!error || (!!list?.listError && !list.listDenied);
+    const [tries, setTries] = useState(0);
+    useEffect(() => setTries(0), [profileId]);
+    useEffect(() => {
+        if (!failed) {
+            setTries(0);
+            return;
+        }
+        if (tries >= RETRIES) return;
+        const t = window.setTimeout(() => {
+            setTries((n) => n + 1);
+            void load();
+        }, RETRY_MS * 2 ** tries);
+        return () => window.clearTimeout(t);
+    }, [failed, tries, load]);
 
     const forget = async (name: string) => {
         try {

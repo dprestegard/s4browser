@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/rand/v2"
 	"slices"
 	"sync"
@@ -107,6 +108,10 @@ type cleanupState struct {
 	temps    int
 	err      string
 	warnings map[string][]string // by pass: "" for launch, a profile ID otherwise
+	// deferrals are the warnings of entries a pass left in the journal, by entry
+	// ID. Status shows one only while its entry is still there, and leaves its
+	// text out of warnings.
+	deferrals map[string]string
 }
 
 // ErrUnavailable means transfers cannot run, with the reason in the message.
@@ -224,6 +229,10 @@ func (s *Service) startCleanup(scope string, pass func(context.Context) (journal
 			s.cleanup.finished = true
 		}
 		s.cleanup.warnings[scope] = report.Warnings
+		if s.cleanup.deferrals == nil {
+			s.cleanup.deferrals = map[string]string{}
+		}
+		maps.Copy(s.cleanup.deferrals, report.Deferrals)
 		s.cleanup.err = ""
 		if err != nil && s.ctx.Err() == nil {
 			s.cleanup.err = err.Error()
@@ -293,7 +302,27 @@ func (s *Service) Status() Status {
 	if s.fileStore != nil {
 		st.Warnings = append(st.Warnings, s.fileStore.Warnings()...)
 	}
+	var pending map[string]struct{}
+	if s.recovery != nil {
+		pending = map[string]struct{}{}
+		for _, e := range s.recovery.Pending() {
+			pending[e.ID] = struct{}{}
+		}
+	}
 	s.mu.Lock()
+	// A deferral warning is hidden once its entry has left the journal, unless
+	// an entry still there has the same text.
+	resolved, active := map[string]struct{}{}, map[string]struct{}{}
+	for id, w := range s.cleanup.deferrals {
+		if _, ok := pending[id]; ok {
+			active[w] = struct{}{}
+		} else {
+			resolved[w] = struct{}{}
+		}
+	}
+	for w := range active {
+		delete(resolved, w)
+	}
 	scopes := make([]string, 0, len(s.cleanup.warnings))
 	for scope := range s.cleanup.warnings {
 		scopes = append(scopes, scope)
@@ -301,7 +330,7 @@ func (s *Service) Status() Status {
 	slices.Sort(scopes)
 	for _, scope := range scopes {
 		for _, w := range s.cleanup.warnings[scope] {
-			if !slices.Contains(st.Warnings, w) {
+			if _, done := resolved[w]; !done && !slices.Contains(st.Warnings, w) {
 				st.Warnings = append(st.Warnings, w)
 			}
 		}

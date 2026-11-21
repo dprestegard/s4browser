@@ -54,6 +54,10 @@ export function CreateFolder(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['CreateFolder'](arg1, arg2, arg3, arg4);
 }
 
+export function CurrentCredentials(arg1) {
+  return window['go']['main']['App']['CurrentCredentials'](arg1);
+}
+
 export function DeleteProfile(arg1) {
   return window['go']['main']['App']['DeleteProfile'](arg1);
 }
@@ -64,6 +68,14 @@ export function DiscardDelete(arg1) {
 
 export function Info() {
   return window['go']['main']['App']['Info']();
+}
+
+export function ListingKeys(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['ListingKeys'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function ListingLocate(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListingLocate'](arg1, arg2, arg3, arg4);
 }
 
 export function ListingSummary(arg1, arg2, arg3, arg4) {

@@ -470,7 +470,7 @@ func (s *Service) Summarize(id string, spec SortSpec, ranges [][2]int) (Summary,
 	var out Summary
 	for _, r := range ranges {
 		from, to := max(r[0], 0), min(r[1], len(perm)-1)
-		for _, i := range perm[min(from, to+1) : max(to+1, from)] {
+		for _, i := range perm[min(from, to+1):max(to+1, from)] {
 			row := &l.rows[i]
 			out.Count++
 			if row.folder {
@@ -544,11 +544,52 @@ func (s *Service) Selection(id string, spec SortSpec, version uint64, ranges [][
 	last := -1
 	for _, r := range ranges {
 		from, to := max(r[0], 0, last+1), min(r[1], len(perm)-1)
-		for _, i := range perm[min(from, to+1) : max(to+1, from)] {
+		for _, i := range perm[min(from, to+1):max(to+1, from)] {
 			row := &l.rows[i]
 			out.Entries = append(out.Entries, Entry{Key: row.key, Folder: row.folder, Size: row.size})
 		}
 		last = max(last, to)
+	}
+	return out, nil
+}
+
+// MaxLocate is the most keys Locate takes in one call. A larger selection is
+// not carried across a reload.
+const MaxLocate = 10000
+
+// Locate returns the index of each key in the given sort order of a listing, or
+// -1 for a key the listing does not hold. A reload uses it to keep the
+// selection and the focused row on the same objects, wherever new or removed
+// rows moved them.
+func (s *Service) Locate(id string, spec SortSpec, keys []string) ([]int, error) {
+	switch spec.Field {
+	case SortName, SortSize, SortModified, SortClass:
+	case "":
+		spec.Field = SortName
+	default:
+		return nil, fmt.Errorf("unknown sort field %q", spec.Field)
+	}
+	if len(keys) > MaxLocate {
+		return nil, fmt.Errorf("at most %d keys can be located at once", MaxLocate)
+	}
+	l, err := s.listing(id)
+	if err != nil {
+		return nil, err
+	}
+	want := make(map[string][]int, len(keys))
+	for i, k := range keys {
+		want[k] = append(want[k], i)
+	}
+	out := make([]int, len(keys))
+	for i := range out {
+		out[i] = -1
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for rank, i := range l.viewLocked(spec) {
+		for _, at := range want[l.rows[i].key] {
+			out[at] = rank
+		}
 	}
 	return out, nil
 }

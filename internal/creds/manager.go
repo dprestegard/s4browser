@@ -390,6 +390,30 @@ func (m *Manager) Refresh(ctx context.Context, id string) (Status, error) {
 	return st, nil
 }
 
+// Current returns the status of the credentials the profile's cache holds now,
+// loading them if they are missing or expired, as the next AWS request would. It
+// does not discard good credentials and tells no listener. The window uses it
+// to keep a profile's expiry current.
+func (m *Manager) Current(ctx context.Context, id string) (Status, error) {
+	c, err := m.cache(id)
+	if err != nil {
+		return Status{}, err
+	}
+	creds, err := c.Retrieve(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	st := Status{}
+	if len(creds.AccessKeyID) >= 4 {
+		st.KeyHint = keyHint(creds.AccessKeyID)
+	}
+	if creds.CanExpire {
+		expires := creds.Expires.Add(refreshAhead)
+		st.Expires = &expires
+	}
+	return st, nil
+}
+
 // OnCredentialsChanged registers fn to hear that a profile's credentials may
 // have changed: after AddKeys, UpdateKeys, Delete and a successful Reload. The
 // app connects it to engine.NotifyCredentialsChanged and to

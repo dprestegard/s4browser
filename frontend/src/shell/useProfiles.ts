@@ -2,6 +2,7 @@ import {useCallback, useEffect, useRef, useState} from 'react';
 import {
     AddKeyProfile,
     CheckProfile,
+    CurrentCredentials,
     DeleteProfile,
     Profiles as LoadProfiles,
     SelectProfile,
@@ -53,6 +54,28 @@ export function useProfiles() {
     useEffect(() => {
         if (loaded) check(state.activeId);
     }, [loaded, state.activeId, check]);
+
+    // When the shown expiry passes, ask what the credential cache holds now. A
+    // credential_process helper has usually handed out newer credentials by
+    // then, because transfers asked for them. This loads nothing that is still
+    // valid and does not count as a reload.
+    useEffect(() => {
+        if (status.state !== 'ok' || !status.expires) return;
+        const id = state.activeId;
+        const t = window.setTimeout(async () => {
+            const seq = ++checkSeq.current;
+            try {
+                const r = await CurrentCredentials(id);
+                if (seq !== checkSeq.current) return;
+                setStatus(r.ok
+                    ? {state: 'ok', keyHint: r.keyHint, expires: r.expires ? new Date(r.expires as unknown as string).getTime() : undefined}
+                    : {state: 'failed', message: r.message ?? 'The credentials did not load.'});
+            } catch (err) {
+                if (seq === checkSeq.current) setStatus({state: 'failed', message: String(err)});
+            }
+        }, Math.max(1000, status.expires - Date.now() + 1000));
+        return () => window.clearTimeout(t);
+    }, [status, state.activeId]);
 
     const select = useCallback(async (id: string) => {
         await SelectProfile(id);

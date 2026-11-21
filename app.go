@@ -57,6 +57,15 @@ func logPath() (string, error) {
 	return filepath.Join(dir, "s4browser", "filedrop.log"), nil
 }
 
+// emit sends an event to the window, or to emitHook in tests.
+func (a *App) emit(event string, payload any) {
+	if a.emitHook != nil {
+		a.emitHook(event, payload)
+		return
+	}
+	runtime.EventsEmit(a.ctx, event, payload)
+}
+
 // startup opens the log and registers the native file-drop callback.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
@@ -70,6 +79,10 @@ func (a *App) startup(ctx context.Context) {
 	}
 	if a.profiles, err = openProfiles(); err != nil {
 		a.profilesErr = err.Error()
+	} else {
+		// The window reloads what failed for want of credentials, such as the
+		// bucket list, when a profile's credentials change.
+		a.profiles.OnCredentialsChanged(func(id string) { a.emit("s4:credentials", id) })
 	}
 	if a.browse, err = a.openBrowse(); err != nil {
 		a.browseErr = err.Error()

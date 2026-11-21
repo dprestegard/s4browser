@@ -31,11 +31,17 @@ export function CloseListing(arg1:string):Promise<void>;
 
 export function CreateFolder(arg1:string,arg2:string,arg3:string,arg4:string):Promise<string>;
 
+export function CurrentCredentials(arg1:string):Promise<main.ProfileCheck>;
+
 export function DeleteProfile(arg1:string):Promise<void>;
 
 export function DiscardDelete(arg1:string):Promise<void>;
 
 export function Info():Promise<main.StartInfo>;
+
+export function ListingKeys(arg1:string,arg2:string,arg3:boolean,arg4:number,arg5:Array<any>):Promise<Array<string>>;
+
+export function ListingLocate(arg1:string,arg2:string,arg3:boolean,arg4:Array<string>):Promise<Array<number>>;
 
 export function ListingSummary(arg1:string,arg2:string,arg3:boolean,arg4:Array<any>):Promise<browse.Summary>;
 

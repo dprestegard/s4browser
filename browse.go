@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -112,4 +113,32 @@ func (a *App) ListingSummary(id string, field string, desc bool, ranges [][2]int
 		return browse.Summary{}, err
 	}
 	return s.Summarize(id, browse.SortSpec{Field: browse.SortField(field), Desc: desc}, ranges)
+}
+
+// ListingKeys returns the keys of a selection of at most browse.MaxLocate rows,
+// made on this version of the listing. The UI keeps them across a reload.
+func (a *App) ListingKeys(id string, field string, desc bool, version uint64, ranges [][2]int) ([]string, error) {
+	s, err := a.browser()
+	if err != nil {
+		return nil, err
+	}
+	spec := browse.SortSpec{Field: browse.SortField(field), Desc: desc}
+	sum, err := s.Summarize(id, spec, ranges)
+	if err != nil {
+		return nil, err
+	}
+	if sum.Count > browse.MaxLocate {
+		return nil, fmt.Errorf("the selection has %d items, more than the %d kept across a reload", sum.Count, browse.MaxLocate)
+	}
+	return s.Keys(id, spec, version, ranges)
+}
+
+// ListingLocate returns the index of each key in the given order of a listing,
+// or -1 for a key it does not hold.
+func (a *App) ListingLocate(id string, field string, desc bool, keys []string) ([]int, error) {
+	s, err := a.browser()
+	if err != nil {
+		return nil, err
+	}
+	return s.Locate(id, browse.SortSpec{Field: browse.SortField(field), Desc: desc}, keys)
 }

@@ -243,6 +243,10 @@ type Report struct {
 	Deferred int
 	// Warnings are shown to the user.
 	Warnings []string
+	// Deferrals holds the warnings of entries kept for a later pass, by entry
+	// ID. Each is also in Warnings. A warning here is out of date once its entry
+	// has left the journal, so a caller showing warnings can drop it then.
+	Deferrals map[string]string
 }
 
 // Recoverer runs launch cleanup in the background. It is implemented in stage 2.1.

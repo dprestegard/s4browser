@@ -745,3 +745,29 @@ func TestCredentialChangesAreAnnounced(t *testing.T) {
 		t.Fatalf("heard %v, want %v", got(), want)
 	}
 }
+
+// TestCurrentDoesNotReload: Current reports the cached credentials without
+// running the helper again or telling listeners, unlike Reload.
+func TestCurrentDoesNotReload(t *testing.T) {
+	_, m := processFixture(t, "count")
+	counter := filepath.Join(t.TempDir(), "count")
+	t.Setenv("S4_HELPER_COUNT", counter)
+	var told int
+	m.OnCredentialsChanged(func(string) { told++ })
+	id := AWSID("proc")
+	for range 3 {
+		st, err := m.Current(context.Background(), id)
+		if err != nil || st.Expires == nil || st.KeyHint == "" {
+			t.Fatalf("%+v %v", st, err)
+		}
+	}
+	if data, _ := os.ReadFile(counter); len(data) != 1 || told != 0 {
+		t.Fatalf("helper ran %d times, listeners told %d times", len(data), told)
+	}
+	if _, err := m.Reload(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(counter); len(data) != 2 || told != 1 {
+		t.Fatalf("after Reload: helper ran %d times, listeners told %d times", len(data), told)
+	}
+}

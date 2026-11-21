@@ -71,3 +71,27 @@ export function applyInitialTheme() {
     document.documentElement.dataset.theme = theme === 'system' ? (systemDark() ? 'dark' : 'light') : theme;
     document.documentElement.dataset.density = read<Density>('density', 'compact');
 }
+
+// The open location survives a reload of the window (the WebView's Refresh) but
+// not a restart, so it lives in sessionStorage. It is a convenience: when
+// storage is unavailable the window opens with no bucket, as before.
+export type SavedLocation = {profileId: string; bucket: string; prefix: string; region?: string};
+
+export function readSavedLocation(): SavedLocation | null {
+    try {
+        const raw = sessionStorage.getItem('s4:location');
+        const v = raw ? JSON.parse(raw) as SavedLocation : null;
+        return v && typeof v.profileId === 'string' && typeof v.bucket === 'string' && typeof v.prefix === 'string' ? v : null;
+    } catch {
+        return null;
+    }
+}
+
+export function saveLocation(v: SavedLocation | null) {
+    try {
+        if (v) sessionStorage.setItem('s4:location', JSON.stringify(v));
+        else sessionStorage.removeItem('s4:location');
+    } catch {
+        // Storage refused: a reload opens with no bucket.
+    }
+}

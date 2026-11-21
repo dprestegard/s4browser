@@ -1,7 +1,7 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
 import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../wailsjs/go/main/App';
-import {Density, ThemeSetting, useAppliedTheme, useSetting} from './settings';
+import {Density, readSavedLocation, saveLocation, ThemeSetting, useAppliedTheme, useSetting} from './settings';
 import {useProfiles} from './shell/useProfiles';
 import {useQueue} from './shell/useQueue';
 import {TopBar} from './shell/TopBar';
@@ -18,6 +18,15 @@ import {formatSize, plural} from './ui/format';
 import {Drop, DroppedItem, Location, noSelection, SelectionInfo, SelectionRequest, Snapshot, SubmitReport} from './types';
 
 type PendingDrop = {items: DroppedItem[]; target: Location};
+
+// Uploads that finish into the folder on screen reload its listing on their
+// own, at most once per AUTO_RELOAD_GAP and no sooner than AUTO_RELOAD_DELAY
+// after the first, so a folder upload of many files does not relist the folder
+// for each one. A folder with more rows than AUTO_RELOAD_ROWS is costly to
+// relist, so it shows a Reload button instead.
+const AUTO_RELOAD_DELAY = 1000;
+const AUTO_RELOAD_GAP = 5000;
+const AUTO_RELOAD_ROWS = 20000;
 
 // The folder that holds a Windows path, for the next picker to open in.
 const parentOf = (p: string) => p.replace(/[\\/]+$/, '').replace(/[\\/][^\\/]*$/, '');
@@ -55,11 +64,25 @@ export default function App() {
     const locationRef = useRef(location);
     locationRef.current = location;
 
-    // A new profile starts with nothing open.
+    // A new profile starts with nothing open. After a reload of the window, the
+    // location that was open comes back once its profile is the active one.
+    const saved = useRef(readSavedLocation());
+    const profilesLoaded = profiles.loaded;
     useEffect(() => {
+        if (!profilesLoaded) return;
+        const s = saved.current;
+        saved.current = null;
+        if (s && s.profileId === profileId) {
+            setLocation({bucket: s.bucket, prefix: s.prefix, region: s.region});
+            return;
+        }
         setLocation(null);
         setHistory([]);
-    }, [profileId]);
+    }, [profileId, profilesLoaded]);
+    useEffect(() => {
+        if (!profilesLoaded || saved.current) return;
+        saveLocation(location ? {profileId, ...location} : null);
+    }, [profileId, profilesLoaded, location]);
 
     const go = useCallback((next: Location) => {
         if (location && location.bucket === next.bucket && location.prefix === next.prefix) return;
@@ -83,6 +106,24 @@ export default function App() {
         if (initial || j.direction !== 'upload' || j.state !== 'completed' || before?.state === 'completed') return;
         if (here && j.bucket === here.bucket && j.key.startsWith(here.prefix)) setFresh((n) => n + 1);
     }), [queue.onChange]);
+
+    const autoReload = !!snapshot && snapshot.count <= AUTO_RELOAD_ROWS;
+    const reloadTimer = useRef<number | null>(null);
+    const lastReload = useRef(0);
+    useEffect(() => {
+        if (fresh === 0 || !autoReload || reloadTimer.current !== null) return;
+        const wait = Math.max(AUTO_RELOAD_DELAY, lastReload.current + AUTO_RELOAD_GAP - Date.now());
+        reloadTimer.current = window.setTimeout(() => {
+            reloadTimer.current = null;
+            lastReload.current = Date.now();
+            setRefresh((n) => n + 1);
+        }, wait);
+    }, [fresh, autoReload]);
+    // A pending reload belongs to the folder it was planned for.
+    useEffect(() => () => {
+        if (reloadTimer.current !== null) window.clearTimeout(reloadTimer.current);
+        reloadTimer.current = null;
+    }, [location?.bucket, location?.prefix, profileId]);
 
     const report = (verb: 'upload' | 'download', rep: SubmitReport) => {
         setLast({verb, report: rep, at: Date.now()});
@@ -184,7 +225,7 @@ export default function App() {
                          canGoBack={history.length > 0} onBack={back}
                          onSnapshot={setSnapshot} onSelection={setSelection} density={density}
                          onUpload={pickUpload} onDownload={download}
-                         uploadBlocked={uploadBlocked} downloadBlocked={blocked} freshUploads={fresh}
+                         uploadBlocked={uploadBlocked} downloadBlocked={blocked} freshUploads={autoReload ? 0 : fresh}
                          onNewFolder={() => location && setNewFolder(location)}
                          onDelete={(sel) => location && setDeleting({at: location, sel})} refresh={refresh}/>
                 {detailsOpen && <Details profileId={profileId} location={location} snapshot={snapshot} selection={selection}

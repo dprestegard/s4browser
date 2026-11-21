@@ -775,3 +775,42 @@ func TestSelectionKeys(t *testing.T) {
 		t.Fatalf("closed listing: err = %v", err)
 	}
 }
+
+// TestLocateAfterReload: keys selected in one listing are found in a reload of
+// the folder after objects were added around them. A key the reload does not
+// hold, such as a deleted object, is -1.
+func TestLocateAfterReload(t *testing.T) {
+	e := newEnv(t, envOpts{})
+	now := time.Now()
+	for _, k := range []string{"loc/b.bin", "loc/d.bin", "loc/f.bin"} {
+		if err := e.fake.PutListed("east-bucket", k, 10, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spec := SortSpec{Field: SortName}
+	first := e.wait(e.open("east-bucket", "loc/").ID)
+	keys, err := e.svc.Keys(first.ID, spec, first.Version, [][2]int{{1, 2}})
+	if err != nil || fmt.Sprint(keys) != "[loc/d.bin loc/f.bin]" {
+		t.Fatalf("keys %q %v", keys, err)
+	}
+	// New objects sort before and between the selected ones.
+	for _, k := range []string{"loc/a.bin", "loc/c.bin", "loc/e.bin"} {
+		if err := e.fake.PutListed("east-bucket", k, 10, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	second := e.wait(e.open("east-bucket", "loc/").ID)
+	got, err := e.svc.Locate(second.ID, spec, append(keys, "loc/gone.bin", "loc/b.bin", "loc/d.bin"))
+	if err != nil || fmt.Sprint(got) != "[3 5 -1 1 3]" {
+		t.Fatalf("located %v %v", got, err)
+	}
+	if got, _ := e.svc.Locate(second.ID, SortSpec{Field: SortName, Desc: true}, []string{"loc/a.bin"}); fmt.Sprint(got) != "[5]" {
+		t.Fatalf("descending: %v", got)
+	}
+	if _, err := e.svc.Locate(second.ID, spec, make([]string, MaxLocate+1)); err == nil {
+		t.Fatal("too many keys accepted")
+	}
+	if _, err := e.svc.Locate("nope", spec, nil); !errors.Is(err, ErrListingNotFound) {
+		t.Fatalf("closed listing: %v", err)
+	}
+}

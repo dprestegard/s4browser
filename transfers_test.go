@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -871,6 +872,15 @@ func TestLaunchCleanupResumesWhenCredentialsChange(t *testing.T) {
 	if u := r.server.ActiveUploads(fakes3.DefaultBucket); len(u) != 1 {
 		t.Fatalf("uploads on S3: %+v", u)
 	}
+	waiting := func(st queue.Status) bool {
+		return slices.ContainsFunc(st.Warnings, func(w string) bool { return strings.Contains(w, "work again") })
+	}
+	notTemp := func(st queue.Status) bool {
+		return slices.ContainsFunc(st.Warnings, func(w string) bool { return strings.Contains(w, "it is not one") })
+	}
+	if !waiting(st) || !notTemp(st) {
+		t.Fatalf("warnings while waiting: %q", st.Warnings)
+	}
 
 	r.profile.signIn(newKey, true)
 	if check := r.app.CheckProfile(tProfile); !check.OK {
@@ -889,6 +899,11 @@ func TestLaunchCleanupResumesWhenCredentialsChange(t *testing.T) {
 	}
 	if st.Cleanup.UploadsAborted != 1 {
 		t.Fatalf("cleanup: %+v", st.Cleanup)
+	}
+	// The promise to clean up later is gone once kept; the note about the path
+	// that was left alone stays.
+	if waiting(st) || !notTemp(st) {
+		t.Fatalf("warnings after the cleanup: %q", st.Warnings)
 	}
 	r.assertNoUploads()
 }

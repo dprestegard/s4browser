@@ -1,6 +1,6 @@
 import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
-import {CloseListing, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
+import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Icon} from '../ui/Icon';
 import {useDismiss} from '../ui/overlay';
@@ -80,6 +80,25 @@ function readRowHeight(): number {
 type Memory = {scroll: number; focus: number; ranges: Range[]; count: number; sort: Sort};
 type Restore = {scroll: boolean; sel: boolean; mem: Memory};
 
+// A reload of the folder on screen keeps the selection and the focused row on
+// the same objects, wherever new or removed rows moved them: their keys are read
+// before the reload and located in the new listing. Larger selections are not
+// carried (Go's browse.MaxLocate).
+const KEEP_MAX = 10000;
+type Keep = {loc: string; keys: string[]; focusKey: string; focus: number; scroll: number};
+
+// Builds ranges from row indexes in any order, skipping -1.
+function rangesOf(indexes: number[]): Range[] {
+    const sorted = indexes.filter((i) => i >= 0).sort((a, b) => a - b);
+    const out: Range[] = [];
+    for (const i of sorted) {
+        const last = out[out.length - 1];
+        if (last && i <= last[1] + 1) last[1] = Math.max(last[1], i);
+        else out.push([i, i]);
+    }
+    return out;
+}
+
 export function Browser({profileId, location, onNavigate, canGoBack, onBack, onSnapshot, onSelection, density,
                             onUpload, onDownload, uploadBlocked, downloadBlocked, freshUploads,
                             onNewFolder, onDelete, refresh}: {
@@ -98,13 +117,15 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     /** Why uploading or downloading cannot start now, or ''. */
     uploadBlocked: string;
     downloadBlocked: string;
-    /** Uploads into this folder finished since it was listed. */
+    /** Uploads into this folder finished since it was listed, when the folder
+     *  is too large for the automatic reload; 0 otherwise. */
     freshUploads: number;
     /** Opens the new folder dialog for the folder shown. */
     onNewFolder: () => void;
     /** Asks to delete the selection. */
     onDelete: (sel: SelectionRequest) => void;
-    /** Changing it reloads the listing, after a delete or a new folder. */
+    /** Changing it reloads the listing, keeping the selection: after a delete, a
+     *  new folder or finished uploads. */
     refresh: number;
 }) {
     const [snap, setSnap] = useState<Snapshot | null>(null);
@@ -126,6 +147,7 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
     // pointer action on the table cancels it.
     const pendingFocus = useRef(false);
     const restore = useRef<Restore | null>(null);
+    const keep = useRef<Keep | null>(null);
     const memory = useRef(new Map<string, Memory>());
     const blocks = useRef(new Map<number, {stamp: string; rows: Row[]}>());
     const inflight = useRef(new Set<string>());
@@ -197,8 +219,9 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         const active = document.activeElement;
         pendingFocus.current = !active || active === document.body || !!mainRef.current?.contains(active);
         const key = `${profileId}|${bucket}|${prefix}`;
+        if (keep.current && keep.current.loc !== key) keep.current = null;
         const mem = memory.current.get(key);
-        restore.current = mem ? {scroll: mem.scroll > 0, sel: mem.ranges.length > 0, mem} : null;
+        restore.current = mem && !keep.current ? {scroll: mem.scroll > 0, sel: mem.ranges.length > 0, mem} : null;
         if (scrollRef.current) scrollRef.current.scrollTop = 0;
         if (!bucket) return;
         let cancelled = false;
@@ -227,7 +250,7 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         };
         // onSnapshot is a state setter from the parent
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [profileId, bucket, prefix, reload, refresh]);
+    }, [profileId, bucket, prefix, reload]);
 
     useEffect(() => EventsOn('s4:listing', (s: Snapshot) => {
         if (s.id !== listingId.current) return;
@@ -312,6 +335,76 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
         }
         if (!r.scroll && !r.sel) restore.current = null;
     }, [snap?.state, total, rowH, stamp, sort.field, sort.desc]);
+
+    // After a reload that keeps the view: the scroll position as soon as the rows
+    // reach it, then the selection and focus once the listing is complete.
+    useEffect(() => {
+        const k = keep.current;
+        const el = scrollRef.current;
+        if (!k || !snap || !current || snap.id !== listingId.current || !el) return;
+        if (k.scroll >= 0 && (HEAD_H + total * rowH >= k.scroll + el.clientHeight || snap.state !== 'loading')) {
+            el.scrollTop = k.scroll;
+            k.scroll = -1;
+        }
+        if (snap.state === 'loading') return;
+        keep.current = null;
+        if (snap.state !== 'done') return;
+        const wanted = k.focusKey ? [...k.keys, k.focusKey] : k.keys;
+        if (wanted.length === 0) {
+            setFocus(Math.min(k.focus, Math.max(0, total - 1)));
+            return;
+        }
+        const basis = stamp;
+        ListingLocate(snap.id, sort.field, sort.desc, wanted)
+            .then((idx) => {
+                if (stampRef.current !== basis) return;
+                setSel({ranges: rangesOf(idx.slice(0, k.keys.length)), basis});
+                const f = k.focusKey ? idx[idx.length - 1] : -1;
+                setFocus(f >= 0 ? f : Math.min(k.focus, Math.max(0, total - 1)));
+                setRestored((n) => n + 1);
+            })
+            .catch(() => setFocus(Math.min(k.focus, Math.max(0, total - 1))));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [snap?.state, snap?.id, total, rowH, stamp]);
+
+    // Reloads the folder on screen and keeps the view: scroll, focus and the
+    // selection, located by key in the new listing.
+    const reloadKeeping = async () => {
+        const loc = `${profileId}|${bucket}|${prefix}`;
+        const id = current ? snap?.id : undefined;
+        const n = countRanges(ranges, total);
+        let keys: string[] = [];
+        if (id && n > 0 && n <= KEEP_MAX) {
+            try {
+                keys = (await ListingKeys(id, sort.field, sort.desc, version, ranges)) ?? [];
+            } catch {
+                keys = []; // The listing changed or closed: reload without the selection.
+            }
+        }
+        keep.current = {loc, keys, focusKey: (current && getRow(focus)?.key) || '', focus, scroll: scrollRef.current?.scrollTop ?? 0};
+        setReload((r) => r + 1);
+    };
+    const reloadRef = useRef(reloadKeeping);
+    reloadRef.current = reloadKeeping;
+
+    // The parent asks for a reload by changing refresh.
+    const firstRefresh = useRef(refresh);
+    useEffect(() => {
+        if (refresh === firstRefresh.current) return;
+        void reloadRef.current();
+    }, [refresh]);
+
+    // F5 and Ctrl+R reload this folder's listing, not the page.
+    useEffect(() => {
+        const onKey = (e: globalThis.KeyboardEvent) => {
+            if (e.key === 'F5' || ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'r' || e.key === 'R'))) {
+                e.preventDefault();
+                if (location) void reloadRef.current();
+            }
+        };
+        window.addEventListener('keydown', onKey, true);
+        return () => window.removeEventListener('keydown', onKey, true);
+    }, [location]);
 
     const moveFocus = (j: number) => {
         setFocus(j);
@@ -478,8 +571,8 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                         </>
                     ) : <span className="meta" style={{padding: '0 4px'}}>No bucket open</span>}
                 </nav>
-                <button type="button" className="btn ghost icon-only" aria-label="Reload listing" title="Reload listing"
-                        disabled={!bucket} onClick={() => setReload((n) => n + 1)}>
+                <button type="button" className="btn ghost icon-only" aria-label="Reload listing" title="Reload listing (F5)"
+                        disabled={!bucket} onClick={() => void reloadKeeping()}>
                     <Icon name="refresh"/>
                 </button>
                 <div className="vsep" style={{margin: '0 4px'}}/>
@@ -593,8 +686,8 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                 )}
                 <div className="spacer"/>
                 {freshUploads > 0 && (
-                    <button type="button" className="btn ghost small" onClick={() => setReload((n) => n + 1)}
-                            title="The listing is a snapshot. Reload it to see the new objects.">
+                    <button type="button" className="btn ghost small" onClick={() => void reloadKeeping()}
+                            title="This folder is too large to reload on its own. Reload it to see the new objects.">
                         <Icon name="refresh" size="sm"/>{plural(freshUploads, 'upload')} finished here · Reload
                     </button>
                 )}

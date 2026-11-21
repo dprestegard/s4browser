@@ -154,7 +154,13 @@ func (r *Recovery) pass(ctx context.Context, want func(Entry) bool) (Report, err
 	wg.Wait()
 
 	var report Report
-	for _, o := range results {
+	for i, o := range results {
+		if o.deferred && o.warning != "" {
+			if report.Deferrals == nil {
+				report.Deferrals = map[string]string{}
+			}
+			report.Deferrals[todo[i].ID] = o.warning
+		}
 		report.UploadsAborted += o.aborted
 		report.TempsRemoved += o.removed
 		if o.deferred {
