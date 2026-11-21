@@ -8,5 +8,11 @@
   "frontend:dev:serverUrl": "auto",
   "author": {
     "name": "Derek Prestegard"
+  },
+  "info": {
+    "productName": "s4browser",
+    "productVersion": "1.0.0",
+    "copyright": "Copyright 2026 Derek Prestegard",
+    "comments": "Desktop S3 client for large media transfers"
   }
 }

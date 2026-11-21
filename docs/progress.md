@@ -1463,7 +1463,7 @@ Stage 4.4 (release build, README, deferred Mac checklist), or stage 4.5 first if
 
 ## Stage 4.5: listing refresh and location kept across a reload
 
-**Status:** done, not committed (waiting for the user's go-ahead). It was done before stage 4.4, as the user chose. R1, R2 and the three smaller issues from stage 4.3 are fixed. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (browse, queue, journal, creds), `tsc --noEmit` and `wails build` pass. No AWS calls were made in this stage.
+**Status:** done, committed as `68fe608`. It was done before stage 4.4, as the user chose. R1, R2 and the three smaller issues from stage 4.3 are fixed. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`), `GOOS=darwin go vet` (browse, queue, journal, creds), `tsc --noEmit` and `wails build` pass. No AWS calls were made in this stage.
 
 ### What changed
 
@@ -1507,3 +1507,67 @@ The app's real profile store (`%AppData%\s4browser\profiles.json`) still has `aw
 ### Next
 
 Stage 4.4 (release build, README, deferred Mac checklist). It is not started here.
+
+## Stage 4.4: release build, README and deferred Mac checklist
+
+**Status:** done, not committed (waiting for the user's go-ahead). The release exe runs from a clean folder. No Go or frontend code changed in this stage, only build settings, the icon and documentation. `GOOS=darwin GOARCH=arm64 go vet` passes for every package, including `main`. No AWS calls were made.
+
+### Release build
+
+- **Command:** `wails build -clean -trimpath -ldflags "-s -w"`.
+- **Output:** `build\bin\s4browser.exe`, 21.2 MiB.
+  - SHA-256 `33C06A5DEDFD5720380B8AC47D56C24B0654C40D29ACD82C04AEB640381B73AB`. Two builds from the same tree gave the same hash.
+  - Build tags: `desktop,wv2runtime.download,production`. No `devfake`.
+- **Version:** 1.0.0, from the new `info` section of `wails.json`. Windows' version API reads ProductName `s4browser`, ProductVersion and FileVersion `1.0.0`, the copyright and the comment.
+- **The version resource needed two fixes** in `build/windows/info.json`:
+  - Its language key was the template's `0000`, which Windows does not show.
+  - The obvious fix, `040904B0`, is silently dropped by `tc-hib/winres`, the library Wails uses, which expects a 4-digit language ID. The key is now `0409`, and a `FileVersion` string was added.
+  - .NET's `FileVersionInfo` still reports the strings as empty, although `GetFileVersionInfo`/`VerQueryValue`, which Explorer uses, return them. Use the Win32 API to check.
+- **Icon:** `build/appicon.png` was the Wails "W". It is now drawn from the app's own logo: two overlapping rounded squares in the dark theme's accent blue on its background colour. `build/windows/icon.ico` was regenerated from it by Wails.
+
+### Clean-folder run
+
+- The exe was copied alone into a new folder (`C:\s4gate\release-check\`) and started.
+- It ran with the window title "s4browser", and a capture of the window showed the full UI and the new icon.
+- It closed normally (`CloseMainWindow`), and the folder still held only the exe. The folder was then removed.
+- Data lives in `%AppData%\s4browser\`, and WebView2's cache in `%AppData%\s4browser.exe\` (Wails' default).
+- The window said "No profile", because `profiles.json` still names `aws:s4-credtest` from stage 4.3 (see "For you").
+
+### Documentation
+
+- **`README.md`** replaces the Wails template's:
+  - install and data locations
+  - credential types
+  - what each part of the app does
+  - known limits, including F11 (no end-to-end download checksum), no resume after closing, and versioned-bucket deletes
+  - building and testing
+  - the test tooling (`s4engine`, `s4credtest`, `S4_WRITE_PREFIX`).
+
+  Its file names and limits were checked against the code.
+- **`docs/mac-checklist.md`** has:
+  - where portability stands
+  - the platform split by file
+  - decisions to make (bundle ID, signing, Keychain prompts, window options)
+  - code to check: hard-link rename on exFAT and SMB, Unicode normalization of keys, Windows path rules, `F_FULLFSYNC`, send buffer limits, helper `PATH`, the data folder
+  - a smoke test.
+
+### Not verified
+
+- **Other machines:** the exe ran only on this one, which has WebView2 157. The WebView2 download bootstrapper, for machines without the runtime, was not tried.
+- **Real S3:** the release exe was not run against AWS. The stage 4.3 checks ran `wails dev` builds of the same code, before the stage 4.5 changes.
+- **macOS:** nothing has been built or run on a Mac.
+
+### For you
+
+- **Active profile:** `%AppData%\s4browser\profiles.json` has `aws:s4-credtest` active. Pick your usual profile in the app once, and it is saved.
+- **Test leftovers:**
+  - The test objects from stage 4.3 are still under `upload-test/s4b-43-20261120/` in `<BUCKET>`.
+  - About 40 GiB of test files are in `C:\s4gate\s43\`.
+  - `.claude/launch.json` (untracked) has the `wails-real-43` entry.
+
+### Next
+
+v1 is complete per the plan. Possible follow-ups:
+- the Mac build (`docs/mac-checklist.md`)
+- a real-S3 run of the release exe
+- cleaning up the stage 4.3 test objects.
