@@ -609,3 +609,37 @@ func TestComputeThroughput(t *testing.T) {
 		t.Fatalf("empty: %+v", z)
 	}
 }
+
+// TestRootMovesTheGuardedPrefix: --root places the run under another prefix,
+// and the guard follows it. A root that would cover a whole bucket is refused.
+func TestRootMovesTheGuardedPrefix(t *testing.T) {
+	h := newHarness(t, "")
+	src := h.generate("a.bin", 6*mib, 1)
+	code, out := h.run(context.Background(), "upload", "--fake", "--root", "upload-test/", "--run-id", "r2", "--result", h.path("up.json"), src)
+	if code != exitOK {
+		t.Fatalf("upload: exit %d\n%s", code, out.stderr.String())
+	}
+	if _, ok := h.server.Object(fakes3.DefaultBucket, "upload-test/r2/a.bin"); !ok {
+		t.Fatal("the object is not under the root")
+	}
+	if r := readResult(t, h.path("up.json")); r.Target.Prefix != "upload-test/r2/" {
+		t.Fatalf("prefix in the result: %q", r.Target.Prefix)
+	}
+	for _, key := range []string{"upload-test/a.bin", "s4browser-test/r2/a.bin", "upload-test/r2x/a.bin"} {
+		if code, _ := h.run(context.Background(), "upload", "--fake", "--root", "upload-test/", "--run-id", "r2", "--key", key, src); code != exitUsage {
+			t.Errorf("key %q: exit %d", key, code)
+		}
+	}
+	for _, root := range []string{"upload-test", "/", "", "../", "a//"} {
+		if code, _ := h.run(context.Background(), "upload", "--fake", "--root", root, "--run-id", "r2", src); code != exitUsage {
+			t.Errorf("root %q: exit %d", root, code)
+		}
+	}
+	code, out = h.run(context.Background(), "cleanup", "--fake", "--root", "upload-test/", "--run-id", "r2", "--result", h.path("clean.json"))
+	if code != exitOK {
+		t.Fatalf("cleanup: exit %d\n%s", code, out.stderr.String())
+	}
+	if _, ok := h.server.Object(fakes3.DefaultBucket, "upload-test/r2/a.bin"); ok {
+		t.Fatal("cleanup left the object")
+	}
+}

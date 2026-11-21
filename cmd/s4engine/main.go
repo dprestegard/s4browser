@@ -2,7 +2,8 @@
 // drives the real engine packages against the local fake S3 (--fake) or against
 // real S3 (--profile, --region, --bucket), and it is the tool the stage 0.7 gate
 // uses. Every remote write, abort and delete goes through the test-prefix guard
-// for s4browser-test/<run-id>/, and no flag disables it.
+// for <root><run-id>/ (root s4browser-test/ unless --root gives another), and no
+// flag disables it.
 //
 // Exit codes: 0 success, 1 transfer or verification failure, 2 usage error or a
 // refused destination, 130 interrupted.

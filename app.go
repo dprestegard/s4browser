@@ -10,6 +10,7 @@ import (
 
 	"s4browser/internal/browse"
 	"s4browser/internal/creds"
+	"s4browser/internal/engine"
 	"s4browser/internal/queue"
 )
 
@@ -38,6 +39,9 @@ type App struct {
 	maxDelete int
 	// emitHook, when set, receives events instead of the window. Tests set it.
 	emitHook func(event string, payload any)
+	// writeGuard, when set, refuses writes outside one key prefix. It comes from
+	// S4_WRITE_PREFIX (see guard.go). Nil allows all writes.
+	writeGuard engine.WriteGuard
 }
 
 // NewApp creates the App.
@@ -56,6 +60,7 @@ func logPath() (string, error) {
 // startup opens the log and registers the native file-drop callback.
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.writeGuard = writeGuardFromEnv()
 	path, err := logPath()
 	if err == nil {
 		a.log, err = openDropLog(path)

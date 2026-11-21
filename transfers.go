@@ -58,6 +58,9 @@ func (a *App) queueOptions(dir string) queue.Options {
 	if a.browse != nil {
 		o.Region = a.browse.Region
 	}
+	if a.writeGuard != nil {
+		o.Guard = a.writeGuard
+	}
 	return o
 }
 

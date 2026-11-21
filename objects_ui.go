@@ -180,6 +180,11 @@ func (a *App) PrepareDelete(sel ObjectSelection) (DeletePreview, error) {
 	if len(plan.Keys) == 0 {
 		return DeletePreview{}, errors.New("the selected folders are empty in S3 now; reload the folder")
 	}
+	for _, key := range plan.Keys {
+		if err := a.checkWrite(key); err != nil {
+			return DeletePreview{}, err
+		}
+	}
 	p := DeletePreview{
 		Bucket: sel.Bucket, Prefix: got.Prefix, Objects: plan.Objects, Bytes: plan.Bytes, Folders: plan.Folders,
 		Selected: len(got.Entries), Placeholders: plan.Placeholders, Sample: append([]string(nil), plan.Keys[:min(8, len(plan.Keys))]...),
@@ -290,6 +295,11 @@ func (a *App) CreateFolder(profileID, bucket, prefix, name string) (string, erro
 	if err != nil {
 		return "", err
 	}
+	if key, err := objects.FolderKey(prefix, name); err == nil {
+		if err := a.checkWrite(key); err != nil {
+			return "", err
+		}
+	}
 	key, err := objects.CreateFolder(ctx, c, bucket, prefix, name)
 	return key, friendly(err)
 }
@@ -334,6 +344,9 @@ func (a *App) ObjectTags(profileID, bucket, key string) ([]objects.Tag, error) {
 // SaveObjectTags replaces one object's tags. before is the set that was shown
 // for editing: if the tags changed since, nothing is saved.
 func (a *App) SaveObjectTags(profileID, bucket, key string, before, after []objects.Tag) ([]objects.Tag, error) {
+	if err := a.checkWrite(key); err != nil {
+		return nil, err
+	}
 	ctx, cancel := context.WithTimeout(a.ctx, objectTimeout)
 	defer cancel()
 	c, err := a.bucketClient(ctx, profileID, bucket)

@@ -19,7 +19,8 @@ type WriteGuard interface {
 
 var runIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 
-// TestPrefixGuard refuses writes outside s4browser-test/<run-id>/.
+// TestPrefixGuard refuses writes outside its prefix: s4browser-test/<run-id>/
+// for test tooling, or the prefix given to NewPrefixGuard.
 type TestPrefixGuard struct {
 	prefix string
 }
@@ -31,6 +32,28 @@ func NewTestPrefixGuard(runID string) (*TestPrefixGuard, error) {
 		return nil, fmt.Errorf("%w: invalid run ID %q", ErrWriteRefused, runID)
 	}
 	return &TestPrefixGuard{prefix: TestKeyRoot + runID + "/"}, nil
+}
+
+// NewPrefixGuard returns a guard that allows writes only strictly below prefix,
+// such as "upload-test/s4browser-43/". The app uses it for verification runs
+// against a real bucket. prefix must end with "/" and have at least two
+// segments, none of them empty, "." or "..", and no backslash or NUL, so a
+// guard can never cover a whole bucket or one top-level folder.
+func NewPrefixGuard(prefix string) (*TestPrefixGuard, error) {
+	trimmed, ok := strings.CutSuffix(prefix, "/")
+	if !ok || strings.ContainsAny(prefix, "\\\x00") {
+		return nil, fmt.Errorf("%w: invalid guard prefix %q: it must end with \"/\"", ErrWriteRefused, prefix)
+	}
+	segments := strings.Split(trimmed, "/")
+	if len(segments) < 2 {
+		return nil, fmt.Errorf("%w: invalid guard prefix %q: it needs at least two folder levels", ErrWriteRefused, prefix)
+	}
+	for _, segment := range segments {
+		if segment == "" || segment == "." || segment == ".." {
+			return nil, fmt.Errorf("%w: invalid guard prefix %q: it has an empty or dot segment", ErrWriteRefused, prefix)
+		}
+	}
+	return &TestPrefixGuard{prefix: prefix}, nil
 }
 
 // Prefix returns the permitted key prefix.

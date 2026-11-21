@@ -105,10 +105,24 @@ Each stage runs in a new session. It reads `docs/implementation-plan.md`, `docs/
 | 4.2 | Fix findings, run the full automated suite | Sonnet | Suite is green under race detector |
 | 4.3 | Real AWS verification with your hands-on checks | Sonnet | Verification checklist is complete |
 | 4.4 | Release build, README, deferred Mac checklist | Haiku | Exe runs from a clean folder |
+| 4.5 | Listing refresh after transfers, location kept across a window reload (requirements R1, R2 below, found in stage 4.3) | Sonnet | Both requirements pass in `wails dev` and the built exe |
 
 **Model rationale:** Opus handles the 6 stages where a subtle mistake is expensive or judgment sets direction: engine contracts, concurrency core, failure recovery, the performance gate, visual design and final review. Sonnet implements against those contracts. Haiku handles only mechanical setup and packaging.
 
 **Escalate from Sonnet to Opus when:** a race or deadlock survives two fix attempts, an engine contract must change, a throughput target is missed, or data integrity is in doubt.
+
+## Requirements added during verification
+
+Found by the user in stage 4.3 (2026-11-20). Stage 4.5 implements them. They may be done before the 4.4 release build.
+
+- **R1, refresh after upload:** when uploads finish into the bucket and folder being shown, the listing updates to show the new objects without the user reloading. This includes uploads of folders, whose objects land in subfolders of the one shown. A reload must keep the selection and scroll position where the rows still exist.
+- **R2, keep the location on reload:** reloading the window (for example the WebView's right-click Refresh) must come back to the same profile, bucket and folder, not to "Open a bucket". Refresh should mean "reload this folder's listing". Either the WebView's own context menu and reload shortcut are replaced by the app's reload, or the location is restored after the page reloads. Transfers are not affected, because they live in Go.
+
+Smaller issues seen in the same run, also for stage 4.5:
+
+- **The bucket list does not recover when credentials return.** If it fails while a profile's credentials are bad, it stays empty after they work again, until the window is reloaded. It should retry on `OnCredentialsChanged`, as transfers do.
+- **The deferred-cleanup warning stays after the cleanup ran.** "An unfinished upload … will be cleaned up when the credentials … work again" is still shown once the upload has been aborted. It should be replaced by the result or removed.
+- **The profile badge says "expired" for a `credential_process` profile whose helper has already handed out new credentials.** It shows the expiry of the credentials it last saw, not of the cache.
 
 ## What you need to do
 

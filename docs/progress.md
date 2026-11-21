@@ -1324,7 +1324,7 @@ Stage 4.2 (fix findings, run the full suite under the race detector) starts from
 
 ## Stage 4.2: fix review findings, full suite under the race detector
 
-**Status:** done, not committed (waiting for the user's go-ahead). F1 to F7 from `docs/review-4.1.md` are fixed, each with a test written for it. `go test -race -count=1 ./...` passes in every package. `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (engine, fsx, journal, queue) pass. The new tests also passed 10 runs in a row under `-race`. No AWS calls were made and `~/.aws` was not read. The work used the session's model (Opus 5.5), because F1 part 2 and F7 change engine contracts. `docs/engine-design.md` is updated to match.
+**Status:** done, committed as `9656b8a`. F1 to F7 from `docs/review-4.1.md` are fixed, each with a test written for it. `go test -race -count=1 ./...` passes in every package. `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (engine, fsx, journal, queue) pass. The new tests also passed 10 runs in a row under `-race`. No AWS calls were made and `~/.aws` was not read. The work used the session's model (Opus 5.5), because F1 part 2 and F7 change engine contracts. `docs/engine-design.md` is updated to match.
 
 ### What changed
 
@@ -1382,3 +1382,81 @@ Contract changes: `ErrDiskFull`, `DiskFullNotice` and `JobSnapshot.PauseReason` 
 ### Next
 
 Stage 4.3 (real AWS verification with your hands-on checks) starts from this commit. It is not started here.
+
+## Stage 4.3: real AWS verification
+
+**Status:** done, not committed (waiting for the user's go-ahead). Every real-AWS and hands-on check in the plan's Verification list (7 to 11) passed on 2026-11-20. The user did the drag-in checks and started the uploads for the cancel, kill and credential checks. `go test -race -count=1 ./...`, `go vet ./...` and `staticcheck ./...` (both also with `-tags devfake`) and `GOOS=darwin go vet` (`cmd/...`, engine) pass on the new code.
+
+### Target
+
+- **Profile:** `<PROFILE>` (session keys from the shared credentials file).
+- **Bucket:** `<BUCKET>`, us-west-2.
+  - Versioning is on.
+  - Default encryption is SSE-KMS.
+  - Lifecycle rules expire noncurrent versions after 15 days and abort incomplete multipart uploads after 7 days.
+- **Prefix:** every write went to `upload-test/s4b-43-20261120/`, enforced in the app (new `S4_WRITE_PREFIX`) and in the CLI (new `--root`).
+- `upload-test/` was empty before the run. Nothing outside the prefix was written or deleted.
+
+### Results
+
+| # | Check | Result | Evidence |
+|---|---|---|---|
+| 7 | 10 GiB round trip at 80% of line rate, matching hashes | **Pass** | `s4engine`, defaults. Upload 297.7 MiB/s (2.50 Gbps), steady 298.0, slowest 10 s 286.7, 0 retries, peak heap 8.6 MiB. Download 247.3 MiB/s (2.07 Gbps), steady 241.8, slowest 10 s 159.8 (the end of the run), 0 retries, peak heap 34.3 MiB. SHA-256 match. Pass mark 200 MB/s from stage 0.7 |
+| 8 | Credentials expire during an upload, and the transfer recovers | **Pass** | Profile `s4-credtest` uses the new `s4credtest` helper with a 3-minute expiry. Upload of 10 GiB at a 25 MiB/s cap. Bad credentials handed out from 21:56:10. At 21:57:56 the job was in `credential-wait` with 33 of 160 parts, 0 retries and the waiting reason shown. It stayed at 33 parts while probes ran 5, 10, 20 and 40 s apart. Good credentials restored at 21:59:05, and the next probe resumed the job without any click. It completed with 160 parts and 0 retries, and a download of the object matched the source |
+| 9 | No multipart uploads under the prefix after cancel and after relaunch | **Pass** | Cancel in the queue aborted `cancel-me.bin` at once, and no object was created. `kill-me.bin` was force-killed at 21:47:15 with its upload and journal entry left. The relaunched app had aborted it and emptied the journal by 21:47:36 |
+| 10 | Presigned URL works before expiry and fails after. Tags on a multipart object | **Pass** | 15-minute link from the app: a 1 MiB ranged GET was 206 and matched the source. At 21:53:15, after the expiry the dialog showed (21:52:37), 403 `AccessDenied`. Tag `s4-stage=4.3` saved on the 160-part object, confirmed with the AWS CLI. Still one version with the same ETag, so nothing was copied |
+| 11 | Drag in a file, a folder and a mixed selection from Explorer | **Pass** (the user) | `single.bin` (70 MiB), `shoot/` (3 files in 2 levels) and a mixed `m1.bin` plus `m-folder/`. All 7 objects arrived with their sizes. `shoot/day2/c.mov` (200 MiB) downloaded and matched |
+
+Also seen:
+
+- **Deferred launch cleanup, real S3.** An app restart (see below) left `credtest.bin`'s upload open while the helper handed out bad credentials. Launch cleanup reported it would clean up when `aws:s4-credtest` worked again, and left it. After good credentials and "Load credentials again", it aborted the upload. Nothing was left on S3 and the journal was empty.
+- **Write guard in the app.** "New folder" in `upload-test/` was refused before any request: "write refused by guard: key "upload-test/guard-probe/" is outside "upload-test/s4b-43-20261120/"".
+- Metadata of the real object showed the 160 parts, the composite CRC32, SSE-KMS with its key and the version ID.
+- The new F1 reservation code ran in three real 10 GiB downloads without a problem.
+
+### New code
+
+| What | Files |
+|---|---|
+| `engine.NewPrefixGuard(prefix)`: a guard for any prefix of at least two levels. A mistyped prefix is refused | `internal/engine/guard.go`, `guard_test.go` |
+| `S4_WRITE_PREFIX` in the app. When set, the queue's engine gets the guard, and delete (when counting), new folder and tag saves check every key before any request. An invalid value refuses every write rather than turning the guard off. Unset means no change | `guard.go`, `guard_test.go`, `app.go`, `transfers.go`, `objects_ui.go` |
+| `s4engine --root` places `<run-id>/` under another prefix (default `s4browser-test/`). Guard, cleanup and results follow it | `cmd/s4engine/target.go`, `run.go`, `main.go`, `cli_test.go` |
+| `s4credtest`, a `credential_process` helper for check 8. It hands out a source profile's credentials with a short expiry. A control file switches between `valid`, `broken` (damaged session token, so S3 answers `InvalidToken`) and `fail`. Each run is logged without key material | `cmd/s4credtest/` |
+
+**A first version of `broken` changed only the secret, and the upload kept working.** The SDK's SigV4 signer caches the derived signing key by access key ID and day, without the secret. A credential change that keeps the access key ID therefore has no effect until the next day. Real expiry changes or invalidates the session token, which the fixed helper now does. This matters only to tests that fake bad credentials.
+
+### Findings for later
+
+The user's two new requirements, R1 (refresh the listing after uploads) and R2 (keep profile, bucket and folder across a window reload, with Refresh meaning "reload this folder"), are in the implementation plan under the new stage 4.5. Three smaller issues are listed with them:
+
+- The bucket list stays empty after credentials recover, until the window is reloaded.
+- The deferred-cleanup warning stays after the cleanup ran.
+- The profile badge says "expired" for a `credential_process` profile whose helper already gave new credentials.
+
+Two things seen are only artifacts of the test setup:
+
+- **The drop prompt appeared in both views.** In `wails dev` it showed in the native window and in the browser pane. A built exe has one window.
+- **Rebuilding a Go file restarted the app.** `wails dev` restarts it when any Go file in the repo changes, which cut off the first check-8 upload. It is covered by the kill test, and was redone.
+
+### Not verified
+
+- **Long runs:** the real runs were short, as in stage 0.7.
+- **A real session expiry:** check 8 used a damaged token, not a session reaching its end. S3's `ExpiredToken` code is still only tested against the fake.
+- **The built exe:** the app ran as `wails dev`. The built exe was not run against AWS.
+
+### Left behind
+
+- **In the bucket, under `upload-test/s4b-43-20261120/`:**
+  - `clip10g.bin` and `credtest.bin` (10 GiB each), plus 5 small files (about 312 MiB), are current objects.
+  - No unfinished multipart uploads remain.
+  - Nothing was deleted, so there are no delete markers. The aborted uploads left no parts.
+- **On this machine, in `C:\s4gate\s43\`:**
+  - The 10 GiB source and its hard links.
+  - Three downloads (about 30 GiB).
+  - The test AWS config and the helper's log.
+  - The two built tools.
+- `.claude/launch.json` (untracked) has a `wails-real-43` entry.
+
+### Next
+
+Stage 4.4 (release build, README, deferred Mac checklist), or stage 4.5 first if the user wants R1 and R2 in the release. Neither is started here.

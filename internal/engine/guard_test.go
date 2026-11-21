@@ -65,3 +65,27 @@ func TestNewTestPrefixGuardRejectsBadRunIDs(t *testing.T) {
 		}
 	}
 }
+
+func TestNewPrefixGuard(t *testing.T) {
+	for _, bad := range []string{"", "/", "upload-test", "upload-test/", "/upload-test/run/", "upload-test//", "upload-test/../",
+		"upload-test/./", `upload-test\run/`, "upload-test/run", "a/\x00/"} {
+		if _, err := NewPrefixGuard(bad); !errors.Is(err, ErrWriteRefused) {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	g, err := NewPrefixGuard("upload-test/s4browser-43/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, ok := range []string{"upload-test/s4browser-43/a.bin", "upload-test/s4browser-43/reel/", "upload-test/s4browser-43/x/y.mov"} {
+		if err := g.CheckWrite(ok); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"upload-test/a.bin", "upload-test/s4browser-43/", "upload-test/s4browser-430/a", "upload-test/s4browser-43/../a",
+		"other/s4browser-43/a", "upload-test/s4browser-43//a"} {
+		if err := g.CheckWrite(bad); !errors.Is(err, ErrWriteRefused) {
+			t.Errorf("%q was allowed", bad)
+		}
+	}
+}

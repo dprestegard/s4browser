@@ -27,6 +27,7 @@ type commonFlags struct {
 	region  string
 	bucket  string
 	runID   string
+	root    string
 	seed    uint64
 	result  string
 }
@@ -36,7 +37,8 @@ func (c *commonFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&c.profile, "profile", "", "AWS profile name (static keys or credential_process)")
 	fs.StringVar(&c.region, "region", "", "AWS region of the bucket")
 	fs.StringVar(&c.bucket, "bucket", "", "bucket name")
-	fs.StringVar(&c.runID, "run-id", "", "test run ID; all keys live under s4browser-test/<run-id>/ (default: generated; required for cleanup against S3)")
+	fs.StringVar(&c.runID, "run-id", "", "test run ID; all keys live under <root><run-id>/ (default: generated; required for cleanup against S3)")
+	fs.StringVar(&c.root, "root", engine.TestKeyRoot, "key prefix the run ID is placed under; it must end with \"/\"")
 	fs.Uint64Var(&c.seed, "seed", 0, "with --fake: content seed of the data (upload: verify the stored object against it; download: seed of the generated object)")
 	fs.StringVar(&c.result, "result", "", "JSON result file (default s4engine-<command>-<run-id>.json in the current directory)")
 }
@@ -56,6 +58,9 @@ func (c *commonFlags) validate(command string, needRunID bool) (*engine.TestPref
 		c.runID = newRunID()
 	}
 	guard, err := engine.NewTestPrefixGuard(c.runID)
+	if err == nil && c.root != engine.TestKeyRoot {
+		guard, err = engine.NewPrefixGuard(c.root + c.runID + "/")
+	}
 	if err != nil {
 		return nil, usagef("%v", err)
 	}

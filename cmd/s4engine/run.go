@@ -41,15 +41,15 @@ const usageText = `s4engine: headless S3 transfer tool for s4browser
 Usage: s4engine <command> [flags] [arguments]
 
 Commands:
-  upload    upload local files to s3://<bucket>/s4browser-test/<run-id>/
-  download  download objects under s4browser-test/<run-id>/ to a directory
+  upload    upload local files to s3://<bucket>/<root><run-id>/
+  download  download objects under <root><run-id>/ to a directory
   verify    compare the SHA-256 of two local files
   generate  write a deterministic test file of a given size
   cleanup   abort multipart uploads and delete objects under the run prefix
 
 Target (upload, download, cleanup): either --fake, or --profile P --region R --bucket B.
-Every write, abort and delete is restricted to s4browser-test/<run-id>/ and
-there is no flag to change that. Flags may appear before or after arguments.
+Every write, abort and delete is restricted to <root><run-id>/. The root is
+s4browser-test/ unless --root names another prefix of at least one folder. Flags may appear before or after arguments.
 Run "s4engine <command> -h" for the flags of a command.
 
 Exit codes: 0 success, 1 transfer or verification failure, 2 usage error or
