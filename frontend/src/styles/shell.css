@@ -139,7 +139,7 @@ html[data-platform=mac] .topbar .spacer { --wails-draggable: drag; }
     background: var(--accent-weak); text-align: center; pointer-events: none;
     backdrop-filter: blur(1px);
 }
-.wails-drop-target-active > .drop-overlay { display: flex; }
+.file-drop-target-active > .drop-overlay { display: flex; }
 .drop-overlay .icon { width: 32px; height: 32px; color: var(--accent); }
 .drop-overlay .title { font-size: var(--fs-heading); line-height: var(--lh-heading); font-weight: 600; }
 .drop-overlay .path { padding: 4px 8px; background: var(--bg2); border: 1px solid var(--line2); border-radius: var(--r-control); }

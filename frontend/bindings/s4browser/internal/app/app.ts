@@ -436,6 +436,23 @@ export function TransferStatus(): $CancellablePromise<queue$0.Status> {
     });
 }
 
+/**
+ * UploadConflicts reports which of the paths an upload would replace, so the
+ * page can ask before overwriting and stay out of the way otherwise. A file
+ * conflicts when an object with its key exists. A folder conflicts when any
+ * object exists under its key prefix: it may replace some of them, and checking
+ * each file would mean reading the whole tree. Paths that cannot be uploaded
+ * (missing, relative) are left for the upload itself to refuse.
+ * 
+ * If the bucket cannot be checked (for example, no permission to read the keys),
+ * it returns an error and the page asks, as an unchecked upload may overwrite.
+ */
+export function UploadConflicts(req: queue$0.UploadRequest): $CancellablePromise<string[]> {
+    return $Call.ByID(368453149, req).then(($result: any) => {
+        return $$createType3($result);
+    });
+}
+
 // Private type creation functions
 const $$createType0 = browse$0.AddResult.createFrom;
 const $$createType1 = browse$0.BucketList.createFrom;

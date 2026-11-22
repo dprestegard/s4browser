@@ -73,6 +73,10 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Frontend tests
+        working-directory: frontend
+        run: npm test
+
       - name: go vet
         run: |
           go vet ./...
