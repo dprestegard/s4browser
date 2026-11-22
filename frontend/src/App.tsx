@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {EventsOn} from './wails';
-import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../bindings/s4browser/internal/app/app';
+import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads, UploadConflicts} from '../bindings/s4browser/internal/app/app';
 import {Density, readSavedLocation, saveLocation, ThemeSetting, useAppliedTheme, useSetting} from './settings';
 import {useProfiles} from './shell/useProfiles';
 import {useQueue} from './shell/useQueue';
@@ -15,9 +15,10 @@ import {Splitter} from './ui/Splitter';
 import {Dialog} from './ui/overlay';
 import {Icon} from './ui/Icon';
 import {formatSize, plural} from './ui/format';
+import {decideDrop} from './dropFlow';
 import {Drop, DroppedItem, Location, noSelection, SelectionInfo, SelectionRequest, Snapshot, SubmitReport} from './types';
 
-type PendingDrop = {items: DroppedItem[]; target: Location};
+type PendingDrop = {items: DroppedItem[]; target: Location; conflicts: string[]; unchecked: boolean};
 
 // Uploads that finish into the folder on screen reload its listing on their
 // own, at most once per AUTO_RELOAD_GAP and no sooner than AUTO_RELOAD_DELAY
@@ -149,6 +150,9 @@ export default function App() {
         }
     };
 
+    const uploadRef = useRef(upload);
+    uploadRef.current = upload;
+
     const pickUpload = async (what: 'files' | 'folder') => {
         const target = locationRef.current;
         if (!target) return;
@@ -187,8 +191,8 @@ export default function App() {
 
     // Dropped files arrive in Go as absolute paths; Go logs them and sends the
     // paths (never file data) as "s4:drop". The drop target is the listing. A
-    // drop asks before uploading, because a stray drag is easy to make and an
-    // upload replaces objects with the same key.
+    // drop uploads at once unless it would replace an object with the same key
+    // (or that cannot be checked), because an upload replaces such objects.
     useEffect(() => {
         return EventsOn('s4:drop', (d: Drop) => {
             const target = locationRef.current;
@@ -197,15 +201,25 @@ export default function App() {
                 setDockOpen(true);
                 return;
             }
-            if (d.items.length > 0) setPendingDrop({items: d.items, target});
+            if (d.items.length === 0) return;
+            const paths = d.items.map((it) => it.path);
+            void decideDrop(
+                () => UploadConflicts({profileId, bucket: target.bucket, region: target.region ?? '', prefix: target.prefix, paths}),
+                uploadBlockedRef.current,
+            ).then((dec) => {
+                if (dec.action === 'upload') void uploadRef.current(paths, target);
+                else setPendingDrop({items: d.items, target, conflicts: dec.conflicts, unchecked: dec.unchecked});
+            });
         });
-    }, [setDockOpen]);
+    }, [setDockOpen, profileId]);
 
     const status = queue.status;
     const blocked = !status ? 'Transfers are starting…'
         : !status.available ? `Transfers are not available: ${status.error ?? queue.error}`
         : busy ? 'Wait until the current request is in the queue' : '';
     const uploadBlocked = blocked || (status?.uploadsDisabled ? `Uploads are turned off: ${status.uploadsDisabledReason ?? ''}` : '');
+    const uploadBlockedRef = useRef('');
+    uploadBlockedRef.current = uploadBlocked;
 
     // Keep the dock from taking the whole window when the window shrinks.
     const maxDock = Math.max(140, Math.round(window.innerHeight * 0.5));
@@ -281,8 +295,15 @@ function DropDialog({drop, blocked, onClose, onUpload}: {drop: PendingDrop; bloc
             </div>
             <p>
                 To <span className="mono" style={{color: 'var(--text)'}}>{target.bucket}/{target.prefix}</span>.
-                {folders > 0 ? ' Folders upload with everything inside them.' : ''} An object that already has the same key is replaced.
+                {folders > 0 ? ' Folders upload with everything inside them.' : ''}
             </p>
+            {drop.conflicts.length > 0 && (
+                <p className="t-warn" role="alert">
+                    Already in the bucket and replaced: <span className="mono">{drop.conflicts.join(', ')}</span>
+                    {folders > 0 ? ' (a folder is listed when objects already exist under its name)' : ''}.
+                </p>
+            )}
+            {drop.unchecked && <p className="t-warn" role="alert">Could not check what already exists, so an object with the same key may be replaced.</p>}
             {blocked && <p className="meta t-warn" role="alert">{blocked}</p>}
             <div className="actions">
                 <button type="button" className="btn" onClick={onClose}>Cancel</button>
