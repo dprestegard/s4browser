@@ -1,0 +1,151 @@
+# Builds s4browser for Windows and macOS, after running the checks from the
+# README. Runs on v* tags and by hand (Actions > build > Run workflow), not on
+# every push: the repo is private and macOS minutes bill at 10x.
+# A v* tag also creates a draft GitHub Release with both builds attached.
+name: build
+
+on:
+  push:
+    tags: ['v*']
+    branches: ['ci/build-workflow'] # TEMP: test before merge; remove
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Exact: tools/notices writes `go version` into THIRD_PARTY_NOTICES.txt,
+  # so `notices -check` fails on any other Go release.
+  GO_VERSION: '1.27.4'
+  NODE_VERSION: '26'
+  WAILS_VERSION: 'v2.17.1'
+  STATICCHECK_VERSION: '2026.2.2'
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows
+            os: windows-latest
+          - name: macos
+            os: macos-latest
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Check C compiler (needed by -race and Wails)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then gcc --version; else clang --version; fi
+
+      - name: Install tools
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
+
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci
+
+      - name: tsc
+        working-directory: frontend
+        run: npx tsc --noEmit
+
+      - name: go vet
+        run: |
+          go vet ./...
+          go vet -tags devfake ./...
+
+      - name: staticcheck
+        run: |
+          staticcheck ./...
+          staticcheck -tags devfake ./...
+
+      # -short skips the 32 GiB / 2 TiB engine runs and the 100,000-object listing.
+      - name: go test -race
+        run: go test -race -short -count=1 ./...
+
+      # Covers both GOOS itself, so one OS is enough.
+      - name: Third-party notices are current
+        if: runner.os == 'Windows'
+        run: go run ./tools/notices -check
+
+      - name: Read version
+        id: ver
+        run: echo "version=$(jq -r .info.productVersion wails.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          wails build -clean -trimpath -ldflags "-s -w"
+          mkdir -p dist
+          cp build/bin/s4browser.exe "dist/s4browser-${{ steps.ver.outputs.version }}-windows-amd64.exe"
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        env:
+          # Wails defaults to 10.13; Go 1.27 needs 13.
+          CGO_CFLAGS: -mmacosx-version-min=13.0
+          CGO_LDFLAGS: -mmacosx-version-min=13.0
+        run: |
+          wails build -clean -trimpath -ldflags "-s -w" -platform darwin/universal
+          archs=$(lipo -archs build/bin/s4browser.app/Contents/MacOS/s4browser)
+          echo "architectures: $archs"
+          case "$archs" in *x86_64*arm64*|*arm64*x86_64*) ;; *) echo "not universal"; exit 1 ;; esac
+          mkdir -p dist
+          # ditto keeps the bundle and its ad hoc signature intact.
+          ditto -c -k --keepParent build/bin/s4browser.app "dist/s4browser-${{ steps.ver.outputs.version }}-macos-universal.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: s4browser-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches wails.json productVersion
+        run: |
+          want="v$(jq -r .info.productVersion wails.json)"
+          if [ "$GITHUB_REF_NAME" != "$want" ]; then
+            echo "tag $GITHUB_REF_NAME does not match productVersion ($want)"
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --generate-notes --title "s4browser $GITHUB_REF_NAME" dist/*

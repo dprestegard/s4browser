@@ -103,6 +103,12 @@ CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 wails
 
 The app is `build/bin/s4browser.app`, signed ad hoc by Wails. Use `-platform darwin/universal` for Intel Macs too (not tried). On Windows, the exe is `build\bin\s4browser.exe`. Its version comes from `info.productVersion` in `wails.json`. The icon is drawn from `build\appicon.png`, and Wails makes `build\windows\icon.ico` from it when that file is missing.
 
+### CI builds
+
+`.github/workflows/build.yml` runs the checks below and then builds `s4browser-<version>-windows-amd64.exe` and `s4browser-<version>-macos-universal.zip` on GitHub's Windows and macOS runners, so a Mac build does not need a Mac. It runs only when started by hand (Actions ▸ build ▸ Run workflow, or `gh workflow run build.yml`) or when a `v*` tag is pushed, because macOS minutes in a private repo bill at 10x. The builds are the run's artifacts. A tag must match `productVersion` in `wails.json` (tag `v0.0.2` for `0.0.2`), and it also creates a draft GitHub Release with both files, which you publish yourself.
+
+The Mac app is signed ad hoc only, so macOS quarantines it after a download: right-click ▸ Open the first time, or run `xattr -dr com.apple.quarantine s4browser.app`.
+
 Development:
 
 ```powershell
