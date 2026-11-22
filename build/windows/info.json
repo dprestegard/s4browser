@@ -1,11 +1,11 @@
 {
 	"fixed": {
-		"file_version": "0.0.2"
+		"file_version": "0.0.3"
 	},
 	"info": {
 		"0409": {
-			"ProductVersion": "0.0.2",
-			"FileVersion": "0.0.2",
+			"ProductVersion": "0.0.3",
+			"FileVersion": "0.0.3",
 			"FileDescription": "s4browser",
 			"LegalCopyright": "Copyright 2026 Derek Prestegard",
 			"ProductName": "s4browser",
