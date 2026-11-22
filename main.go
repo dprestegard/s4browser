@@ -3,11 +3,7 @@ package main
 import (
 	"embed"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/mac"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"s4browser/internal/app"
 )
@@ -29,49 +25,43 @@ var licenseText string
 var noticesText string
 
 func main() {
-	// Create an instance of the app structure
 	a := app.New(licenseText, noticesText)
-	hooks := app.LifecycleHooks(a)
 
-	// Create application with options
-	err := wails.Run(&options.App{
+	wapp := application.New(application.Options{
+		Name:        "s4browser",
+		Description: "Desktop S3 client for large media transfers",
+		Icon:        appIcon,
+		Services:    []application.Service{application.NewService(a)},
+		Assets: application.AssetOptions{
+			Handler: application.BundledAssetFileServer(assets),
+		},
+		Mac: application.MacOptions{
+			ApplicationShouldTerminateAfterLastWindowClosed: true,
+		},
+	})
+
+	window := wapp.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:     "s4browser",
 		Width:     1280,
 		Height:    800,
 		MinWidth:  1024,
 		MinHeight: 640,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
+		URL:       "/",
 		// --bg0 of the dark theme, so the window does not flash before the
 		// page paints. The page switches the title bar when the theme changes.
-		BackgroundColour: &options.RGBA{R: 0x0F, G: 0x10, B: 0x12, A: 255},
-		Windows:          &windows.Options{Theme: windows.Dark},
-		// On macOS the page's top bar is the title bar: Wails cannot switch a
-		// Mac title bar's theme from the page, so a visible one would follow
-		// the system appearance instead of the app's theme. The traffic lights
-		// sit inset over the top bar's left end (see html[data-platform=mac]).
-		Mac: &mac.Options{
-			TitleBar: mac.TitleBarHiddenInset(),
-			About: &mac.AboutInfo{
-				Title:   "s4browser",
-				Message: "Desktop S3 client for large media transfers.\nMIT License. Third-party licenses are under View settings ▸ Licenses.",
-				Icon:    appIcon,
-			},
-		},
-		OnStartup:  hooks.OnStartup,
-		OnShutdown: hooks.OnShutdown,
-		// Quitting cancels unfinished transfers, so it asks first.
-		OnBeforeClose: hooks.OnBeforeClose,
-		// Native file drop: the window resolves dropped files and folders to
-		// absolute paths in Go. File data never crosses the UI bridge.
-		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
-		Bind: []interface{}{
-			a,
-		},
+		BackgroundColour: application.NewRGB(0x0F, 0x10, 0x12),
+		Windows:          application.WindowsWindow{Theme: application.SystemDefault},
+		// On macOS the page's top bar is the title bar: a visible one would
+		// follow the system appearance instead of the app's theme. The traffic
+		// lights sit inset over the top bar's left end (see
+		// html[data-platform=mac]).
+		Mac: application.MacWindow{TitleBar: application.MacTitleBarHiddenInset},
+		// Native file drop: see app.Attach.
+		EnableFileDrop: true,
 	})
+	app.Attach(a, wapp, window)
 
-	if err != nil {
+	if err := wapp.Run(); err != nil {
 		println("Error:", err.Error())
 	}
 }

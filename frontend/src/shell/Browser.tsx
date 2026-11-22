@@ -1,7 +1,7 @@
 import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
-import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/app/App';
-import {EventsOn} from '../../wailsjs/runtime/runtime';
+import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../bindings/s4browser/internal/app/app';
+import {EventsOn} from '../wails';
 import {Icon} from '../ui/Icon';
 import {useDismiss} from '../ui/overlay';
 import {formatDate, formatSize, formatStorageClass, plural} from '../ui/format';

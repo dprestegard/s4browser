@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"s4browser/internal/browse"
 )
 
@@ -31,7 +29,7 @@ func (a *App) openBrowse() (*browse.Service, error) {
 		Dir:         filepath.Join(dir, "s4browser"),
 		Credentials: a.profiles.Provider,
 		Notify: func(s browse.Snapshot) {
-			runtime.EventsEmit(a.ctx, "s4:listing", s)
+			a.emit("s4:listing", s)
 		},
 	}
 	if err := devBrowseOptions(&o); err != nil {

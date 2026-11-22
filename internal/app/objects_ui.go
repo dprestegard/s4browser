@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"s4browser/internal/browse"
 	"s4browser/internal/objects"
@@ -132,7 +131,7 @@ func (a *App) emitObjects(p ObjectProgress) {
 		a.emitHook("s4:objects", p)
 		return
 	}
-	runtime.EventsEmit(a.ctx, "s4:objects", p)
+	a.emit("s4:objects", p)
 }
 
 // PrepareDelete counts the selection: the selected objects plus every object

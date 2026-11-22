@@ -3,7 +3,7 @@ import {Icon} from '../ui/Icon';
 import {Dialog, useDismiss} from '../ui/overlay';
 import {formatRemaining} from '../ui/format';
 import {osName, vaultName} from '../ui/platform';
-import {Licenses} from '../../wailsjs/go/app/App';
+import {Licenses} from '../../bindings/s4browser/internal/app/app';
 import {Density, ThemeSetting} from '../settings';
 import {kindLabels} from '../types';
 import {Profiles} from './useProfiles';

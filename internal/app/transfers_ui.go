@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"s4browser/internal/browse"
 	"s4browser/internal/queue"
 )
@@ -99,23 +97,26 @@ func (a *App) pick(kind pickKind, start string) ([]string, error) {
 	if paths, ok := devPick(kind); ok {
 		return paths, nil
 	}
-	if a.ctx == nil {
+	if a.wapp == nil {
 		return nil, errors.New("the window is not ready")
 	}
+	d := a.wapp.Dialog.OpenFile().AttachToWindow(a.window)
 	switch kind {
 	case pickFiles:
-		return runtime.OpenMultipleFilesDialog(a.ctx, runtime.OpenDialogOptions{
-			Title: "Upload files", DefaultDirectory: existingDir(start),
-		})
+		d.SetTitle("Upload files").CanChooseFiles(true).CanChooseDirectories(false).SetDirectory(existingDir(start))
+		paths, err := d.PromptForMultipleSelection()
+		if paths == nil {
+			paths = []string{}
+		}
+		return paths, err
 	case pickFolder:
-		dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-			Title: "Upload a folder", DefaultDirectory: existingDir(start),
-		})
+		d.SetTitle("Upload a folder").CanChooseFiles(false).CanChooseDirectories(true).SetDirectory(existingDir(start))
+		dir, err := d.PromptForSingleSelection()
 		return nonEmpty(dir), err
 	default:
-		dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-			Title: "Download to folder", DefaultDirectory: downloadStart(start), CanCreateDirectories: true,
-		})
+		d.SetTitle("Download to folder").CanChooseFiles(false).CanChooseDirectories(true).
+			CanCreateDirectories(true).SetDirectory(downloadStart(start))
+		dir, err := d.PromptForSingleSelection()
 		return nonEmpty(dir), err
 	}
 }
@@ -175,18 +176,27 @@ func (a *App) beforeClose(ctx context.Context) bool {
 	if err != nil || n == 0 {
 		return false
 	}
-	answer, err := runtime.MessageDialog(ctx, runtime.MessageDialogOptions{
-		Type:  runtime.QuestionDialog,
-		Title: "Quit s4browser?",
-		Message: fmt.Sprintf("%s not finished. Quitting cancels %s: unfinished uploads are aborted on S3 and "+
-			"partial downloads are deleted. Nothing resumes after a restart.\n\nQuit anyway?",
-			countPhrase(n), them(n)),
-		DefaultButton: "No",
-	})
-	if err != nil {
+	if a.wapp == nil {
 		return false
 	}
-	return answer != "Yes"
+	answer := make(chan bool, 1)
+	dlg := a.wapp.Dialog.Question().SetTitle("Quit s4browser?").
+		SetMessage(fmt.Sprintf("%s not finished. Quitting cancels %s: unfinished uploads are aborted on S3 and "+
+			"partial downloads are deleted. Nothing resumes after a restart.\n\nQuit anyway?",
+			countPhrase(n), them(n))).
+		AttachToWindow(a.window)
+	yes := dlg.AddButton("Yes")
+	yes.OnClick(func() { answer <- true })
+	no := dlg.AddButton("No")
+	no.OnClick(func() { answer <- false })
+	dlg.SetDefaultButton(no).SetCancelButton(no)
+	dlg.Show()
+	select {
+	case yes := <-answer:
+		return !yes
+	case <-ctx.Done():
+		return true
+	}
 }
 
 func countPhrase(n int) string {

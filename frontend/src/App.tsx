@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
-import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
-import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../wailsjs/go/app/App';
+import {EventsOn} from './wails';
+import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../bindings/s4browser/internal/app/app';
 import {Density, readSavedLocation, saveLocation, ThemeSetting, useAppliedTheme, useSetting} from './settings';
 import {useProfiles} from './shell/useProfiles';
 import {useQueue} from './shell/useQueue';
@@ -190,7 +190,6 @@ export default function App() {
     // drop asks before uploading, because a stray drag is easy to make and an
     // upload replaces objects with the same key.
     useEffect(() => {
-        OnFileDrop(() => {}, true);
         return EventsOn('s4:drop', (d: Drop) => {
             const target = locationRef.current;
             if (!target) {

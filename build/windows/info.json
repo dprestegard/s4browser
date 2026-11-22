@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "0.0.1"
 	},
 	"info": {
 		"0409": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"FileVersion": "{{.Info.ProductVersion}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+			"ProductVersion": "0.0.1",
+			"FileVersion": "0.0.1",
+			"FileDescription": "s4browser",
+			"LegalCopyright": "Copyright 2026 Derek Prestegard",
+			"ProductName": "s4browser",
+			"Comments": "Desktop S3 client for large media transfers"
 		}
 	}
 }

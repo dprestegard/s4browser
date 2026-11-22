@@ -21,7 +21,7 @@ env:
   # so `notices -check` fails on any other Go release.
   GO_VERSION: '1.27.4'
   NODE_VERSION: '26'
-  WAILS_VERSION: 'v2.17.1'
+  WAILS_VERSION: 'v3.1.0'
   STATICCHECK_VERSION: '2026.2.2'
 
 jobs:
@@ -60,7 +60,7 @@ jobs:
 
       - name: Install tools
         run: |
-          go install github.com/wailsapp/wails/v2/cmd/wails@${WAILS_VERSION}
+          go install github.com/wailsapp/wails/v3/cmd/wails3@${WAILS_VERSION}
           go install honnef.co/go/tools/cmd/staticcheck@${STATICCHECK_VERSION}
 
       - name: npm ci
@@ -94,29 +94,40 @@ jobs:
 
       - name: Read version
         id: ver
-        run: echo "version=$(jq -r .info.productVersion wails.json)" >> "$GITHUB_OUTPUT"
+        run: echo "version=$(jq -r '.info."0409".ProductVersion' build/windows/info.json)" >> "$GITHUB_OUTPUT"
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
         run: |
-          wails build -clean -trimpath -ldflags "-s -w"
+          wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_amd64.syso
+          go build -tags production -trimpath -buildvcs=false -ldflags "-s -w -H windowsgui" -o build/bin/s4browser.exe
+          rm -f ./*.syso
           mkdir -p dist
           cp build/bin/s4browser.exe "dist/s4browser-${{ steps.ver.outputs.version }}-windows-amd64.exe"
 
       - name: Build (macOS)
         if: runner.os == 'macOS'
         env:
-          # Wails defaults to 10.13; Go 1.27 needs 13.
+          # Go 1.27 needs a deployment target of 13.
           CGO_CFLAGS: -mmacosx-version-min=13.0
           CGO_LDFLAGS: -mmacosx-version-min=13.0
         run: |
-          wails build -clean -trimpath -ldflags "-s -w" -platform darwin/universal
-          archs=$(lipo -archs build/bin/s4browser.app/Contents/MacOS/s4browser)
+          for arch in amd64 arm64; do
+            GOARCH=$arch go build -tags production -trimpath -buildvcs=false -ldflags "-s -w" -o "build/bin/s4browser-$arch"
+          done
+          lipo -create -output build/bin/s4browser build/bin/s4browser-amd64 build/bin/s4browser-arm64
+          app=build/bin/s4browser.app
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp build/bin/s4browser "$app/Contents/MacOS/"
+          cp build/darwin/Info.plist "$app/Contents/"
+          cp build/darwin/icons.icns "$app/Contents/Resources/"
+          codesign --force --deep --sign - "$app"
+          archs=$(lipo -archs "$app/Contents/MacOS/s4browser")
           echo "architectures: $archs"
           case "$archs" in *x86_64*arm64*|*arm64*x86_64*) ;; *) echo "not universal"; exit 1 ;; esac
           mkdir -p dist
           # ditto keeps the bundle and its ad hoc signature intact.
-          ditto -c -k --keepParent build/bin/s4browser.app "dist/s4browser-${{ steps.ver.outputs.version }}-macos-universal.zip"
+          ditto -c -k --keepParent "$app" "dist/s4browser-${{ steps.ver.outputs.version }}-macos-universal.zip"
 
       - uses: actions/upload-artifact@v7
         with:
@@ -133,9 +144,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Tag matches wails.json productVersion
+      - name: Tag matches build/windows/info.json version
         run: |
-          want="v$(jq -r .info.productVersion wails.json)"
+          want="v$(jq -r '.info."0409".ProductVersion' build/windows/info.json)"
           if [ "$GITHUB_REF_NAME" != "$want" ]; then
             echo "tag $GITHUB_REF_NAME does not match productVersion ($want)"
             exit 1

@@ -1,6 +1,6 @@
 import {FormEvent, useEffect, useRef, useState} from 'react';
-import {CancelObjectWork, CreateFolder, DiscardDelete, PrepareDelete, PresignObject, RunDelete} from '../../wailsjs/go/app/App';
-import {EventsOn} from '../../wailsjs/runtime/runtime';
+import {CancelObjectWork, CreateFolder, DiscardDelete, PrepareDelete, PresignObject, RunDelete} from '../../bindings/s4browser/internal/app/app';
+import {EventsOn} from '../wails';
 import {Dialog} from '../ui/overlay';
 import {Icon} from '../ui/Icon';
 import {formatDate, formatRemaining, formatSize, plural} from '../ui/format';

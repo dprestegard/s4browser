@@ -4,9 +4,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 
 	"s4browser/internal/browse"
 	"s4browser/internal/creds"
@@ -20,7 +22,12 @@ import (
 // path leaves this process.
 type App struct {
 	ctx context.Context
-	log *dropLog
+	// wapp and window are set by Attach before the app runs.
+	wapp   *application.App
+	window *application.WebviewWindow
+	// quitConfirmed lets the close that follows an answered "Quit anyway?" through.
+	quitConfirmed atomic.Bool
+	log           *dropLog
 	// logErr is the reason the log file could not be opened, shown on screen.
 	logErr string
 	// profiles is nil if the profile store could not be opened, and profilesErr
@@ -68,11 +75,14 @@ func (a *App) emit(event string, payload any) {
 		a.emitHook(event, payload)
 		return
 	}
-	runtime.EventsEmit(a.ctx, event, payload)
+	if a.wapp != nil {
+		a.wapp.Event.Emit(event, payload)
+	}
 }
 
-// startup opens the log and registers the native file-drop callback.
-func (a *App) startup(ctx context.Context) {
+// ServiceStartup opens the log, the profile store, browsing and the queue. Wails
+// calls it when the application starts; it is not bound to the frontend.
+func (a *App) ServiceStartup(ctx context.Context, _ application.ServiceOptions) error {
 	a.ctx = ctx
 	a.writeGuard = writeGuardFromEnv()
 	path, err := logPath()
@@ -95,10 +105,11 @@ func (a *App) startup(ctx context.Context) {
 	if a.queue, err = a.openQueue(); err != nil {
 		a.queueErr = err.Error()
 	}
-	runtime.OnFileDrop(ctx, a.onDrop)
+	return nil
 }
 
-func (a *App) shutdown(context.Context) {
+// ServiceShutdown stops the queue and closes the stores. Wails calls it on quit.
+func (a *App) ServiceShutdown() error {
 	a.closeQueue()
 	if a.browse != nil {
 		a.browse.Close()
@@ -106,6 +117,7 @@ func (a *App) shutdown(context.Context) {
 	if a.log != nil {
 		_ = a.log.Close()
 	}
+	return nil
 }
 
 // onDrop runs on the Go side of the bridge with the absolute paths Windows
@@ -118,7 +130,7 @@ func (a *App) onDrop(x, y int, paths []string) {
 			drop.LogError = err.Error()
 		}
 	}
-	runtime.EventsEmit(a.ctx, "s4:drop", drop)
+	a.emit("s4:drop", drop)
 }
 
 // StartInfo describes the spike's log for the screen.
@@ -135,16 +147,33 @@ func (a *App) Info() StartInfo {
 	return StartInfo{LogError: a.logErr}
 }
 
-// Hooks are the window lifecycle callbacks wails.Run takes. They are a package
-// function rather than App methods because Wails binds every exported method of
-// App to the frontend, and the page must not be able to call these.
-type Hooks struct {
-	OnStartup     func(context.Context)
-	OnShutdown    func(context.Context)
-	OnBeforeClose func(context.Context) bool
-}
-
-// LifecycleHooks returns a's lifecycle callbacks.
-func LifecycleHooks(a *App) Hooks {
-	return Hooks{OnStartup: a.startup, OnShutdown: a.shutdown, OnBeforeClose: a.beforeClose}
+// Attach wires the window into a. It is a package function rather than an App
+// method because Wails binds every exported method of App to the frontend, and
+// the page must not be able to call it. Native file drop and the quit
+// confirmation are registered here.
+func Attach(a *App, wapp *application.App, window *application.WebviewWindow) {
+	a.wapp, a.window = wapp, window
+	// Native file drop: the window resolves dropped files and folders to
+	// absolute paths in Go. File data never crosses the UI bridge.
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		var x, y int
+		if d := e.Context().DropTargetDetails(); d != nil {
+			x, y = d.X, d.Y
+		}
+		a.onDrop(x, y, e.Context().DroppedFiles())
+	})
+	// Quitting cancels unfinished transfers, so it asks first. The question is
+	// asked off the event hook so the hook can return and keep the window open.
+	window.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if a.quitConfirmed.Load() {
+			return
+		}
+		e.Cancel()
+		go func() {
+			if !a.beforeClose(a.bindingContext()) {
+				a.quitConfirmed.Store(true)
+				wapp.Quit()
+			}
+		}()
+	})
 }

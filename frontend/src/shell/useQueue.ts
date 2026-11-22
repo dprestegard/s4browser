@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {QueueJobs, SetTransferSettings, TransferSettings as FetchSettings, TransferStatus} from '../../wailsjs/go/app/App';
-import {EventsOn} from '../../wailsjs/runtime/runtime';
+import {QueueJobs, SetTransferSettings, TransferSettings as FetchSettings, TransferStatus} from '../../bindings/s4browser/internal/app/app';
+import {EventsOn} from '../wails';
 import {JobView, QueueEvent, QueueStatus, SettingsState, TransferSettings} from '../types';
 
 // The transfer queue as the UI sees it. Go owns the jobs; the page keeps one
