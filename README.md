@@ -1,10 +1,12 @@
 # s4browser
 
-A Windows desktop client for Amazon S3, built for moving very large media files quickly. You browse buckets, drag files and folders in from Explorer, download files and folders, and watch a transfer queue that retries on its own. It also deletes objects, creates folders, shares presigned links and edits tags.
+A desktop client for Amazon S3 on Windows and macOS, built for moving very large media files quickly. You browse buckets, drag files and folders in from Explorer or Finder, download files and folders, and watch a transfer queue that retries on its own. It also deletes objects, creates folders, shares presigned links and edits tags.
 
-Version 1.0.0 is for Windows 10 and 11 (x64). A Mac build and VPC endpoint support are planned: see [docs/roadmap.md](docs/roadmap.md).
+Version 1.0.0 is for Windows 10 and 11 (x64). The Mac build (macOS 13 or later, Apple silicon) builds and passes the test suite but has not been signed or tried against real S3 yet. VPC endpoint support is planned: see [docs/roadmap.md](docs/roadmap.md).
 
 ## Install
+
+### Windows
 
 1. Copy `s4browser.exe` to any folder. There is no installer, and nothing is written next to the exe.
 2. Run it.
@@ -23,6 +25,17 @@ The app keeps its data in your user profile:
 | `%AppData%\s4browser.exe\` | WebView2's cache |
 | Windows Credential Manager, `s4browser:profile/<name>` | Access keys you add in the app |
 
+### macOS
+
+1. Copy `s4browser.app` to Applications (or anywhere).
+2. The app is signed ad hoc, not by an Apple developer ID, so Gatekeeper blocks a copy that came from another Mac or a download. Clear the quarantine flag once, then open it:
+
+   ```bash
+   xattr -dr com.apple.quarantine /Applications/s4browser.app
+   ```
+
+Its data is in `~/Library/Application Support/s4browser/` (the same files as on Windows), WebKit's cache in `~/Library/WebKit/com.dprestegard.s4browser` and `~/Library/Caches/com.dprestegard.s4browser`, and access keys you add in the login Keychain as generic passwords, service `s4browser`, account `profile/<name>`.
+
 Only one copy of the app runs at a time. A second copy is refused, because it would clean up the first one's uploads.
 
 ## Credentials
@@ -35,16 +48,16 @@ The profile menu at the top left lists:
   - `credential_process` helpers, which run hidden and run again a minute before their credentials expire.
 
   Role, SSO and web-identity profiles are listed but not supported.
-- **Access keys you add** with "Add access keys…". The secret goes to Windows Credential Manager, never to a file.
+- **Access keys you add** with "Add access keys…". The secret goes to Windows Credential Manager or the macOS Keychain, never to a file.
 
 One profile is active at a time. When a profile's credentials expire during a transfer, the transfer waits with the reason shown. Other profiles' transfers keep going. When you sign in again and choose "Load credentials again", the transfer continues where it stopped. It also resumes on its own if the profile's helper starts handing out working credentials.
 
 ## Using it
 
 - **Buckets:** the bucket list shows every bucket the profile can list. A role that cannot list buckets can add one by name with **+**. Each bucket's region is detected.
-- **Browsing:** a folder of up to 1,000,000 objects loads in the background and scrolls without delay. Sort by name, size, date or storage class. Select with click, Shift, Ctrl and Ctrl+A. Backspace goes up a folder. F5 or the reload button reloads the folder and keeps the selection.
+- **Browsing:** a folder of up to 1,000,000 objects loads in the background and scrolls without delay. Sort by name, size, date or storage class. Select with click, Shift, Ctrl and Ctrl+A (⌘ and ⌘A on a Mac). Backspace goes up a folder. F5, Ctrl+R (⌘R) or the reload button reloads the folder and keeps the selection.
 - **Uploads:**
-  - Drop files and folders from Explorer on the listing, or use Upload. A drop asks before it starts.
+  - Drop files and folders from Explorer or Finder on the listing, or use Upload. A drop asks before it starts.
   - Folders upload with everything inside them.
   - An object with the same key is replaced.
   - The listing updates as uploads finish into the folder on screen.
@@ -66,18 +79,29 @@ Closing the app while transfers run asks first. Closing cancels them and aborts 
 - **No resume after closing.** Transfers continue only while the app is open. After a crash, the next launch aborts unfinished multipart uploads and removes partial downloads.
 - **Downloads are not checked against S3's stored checksum.** Each part is fetched with `If-Match` on the object's ETag, and its range and the total size are checked, over TLS. A download is not compared end to end with the object's CRC32. Uploads are: each part carries a CRC32, and S3's composite checksum must match.
 - **A full drive pauses a download.** Free space, then resume.
+- **Downloads follow Windows name rules on every system,** so a downloaded folder can be copied to a Windows machine as it is. On a Mac, keys with names such as `CON`, a trailing dot, `<>:"|?*`, or a full path over 259 characters are refused too.
+- **On exFAT and FAT32 volumes (Mac),** which have no hard links and no exclusive rename, a finished download is moved to its name after checking that the name is free. That is not atomic: if another program creates the same file in that instant, it is replaced. APFS, HFS+ and NTFS are not affected.
+- **macOS: keys are uploaded with names as the file system gives them.** Names are not normalized to NFC, so a name with accents can get a different key from a Mac than from Windows.
 - **No S3-compatible endpoints,** ACLs, versioning UI, rename, copy, storage-class change or restore from Glacier.
 - **Session-key profiles have no automatic refresh.** Sign in again with your tool, then use "Load credentials again".
 
 ## Building from source
 
-Requirements: Go 1.27, Node.js 26 LTS, and the Wails CLI v2.17.1 (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1`).
+Requirements: Go 1.27, Node.js 26 LTS, and the Wails CLI v2.17.1 (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1`). On a Mac, also the Xcode Command Line Tools (`xcode-select --install`).
+
+Windows:
 
 ```powershell
 wails build -clean -trimpath -ldflags "-s -w"
 ```
 
-The exe is `build\bin\s4browser.exe`. Its version comes from `info.productVersion` in `wails.json`. The icon is drawn from `build\appicon.png`, and Wails makes `build\windows\icon.ico` from it when that file is missing.
+macOS (Wails sets the deployment target to 10.13 unless told otherwise, and Go 1.27 needs 13):
+
+```bash
+CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 wails build -clean -trimpath -ldflags "-s -w" -platform darwin/arm64
+```
+
+The app is `build/bin/s4browser.app`, signed ad hoc by Wails. Use `-platform darwin/universal` for Intel Macs too (not tried). On Windows, the exe is `build\bin\s4browser.exe`. Its version comes from `info.productVersion` in `wails.json`. The icon is drawn from `build\appicon.png`, and Wails makes `build\windows\icon.ico` from it when that file is missing.
 
 Development:
 
@@ -91,7 +115,7 @@ To run against an in-process fake S3 with no AWS access, build with the `devfake
 wails dev -tags devfake
 ```
 
-Tests (the race detector needs a C compiler, such as WinLibs, and `CGO_ENABLED=1`):
+Tests (the race detector needs a C compiler, such as WinLibs on Windows or the Command Line Tools on a Mac, and `CGO_ENABLED=1`):
 
 ```powershell
 go test -race ./...
@@ -107,7 +131,7 @@ Also run `go vet ./...`, `staticcheck ./...` and `npx tsc --noEmit` in `frontend
 
 ## Documentation
 
-- [docs/roadmap.md](docs/roadmap.md): planned work after v1 (Mac build, VPC endpoints).
+- [docs/roadmap.md](docs/roadmap.md): planned work after v1 (Mac release, VPC endpoints).
 - [docs/engine-design.md](docs/engine-design.md): the transfer engine's normative design.
 - [docs/implementation-plan.md](docs/implementation-plan.md): v1 scope, decisions and stages.
 - [docs/progress.md](docs/progress.md): what each stage did and found (history).

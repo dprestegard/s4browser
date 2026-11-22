@@ -58,9 +58,10 @@ func VolumeOf(dir string) (string, error) {
 	return fmt.Sprint(st.Dev), nil
 }
 
+// linkFinalizer is the no-replace rename on macOS and other Unix systems.
 type linkFinalizer struct{}
 
-func (linkFinalizer) RenameNoReplace(tmp, final string) error { return renameNoReplaceLink(tmp, final) }
+func (linkFinalizer) RenameNoReplace(tmp, final string) error { return renameNoReplace(tmp, final) }
 
 // NewFinalizer returns the platform's no-replace rename.
 func NewFinalizer() Finalizer { return linkFinalizer{} }

@@ -527,7 +527,7 @@ func TestFolderUploadOnDisk(t *testing.T) {
 	if drop[0].Kind != KindFolder {
 		t.Fatalf("drop: %+v", drop)
 	}
-	paths := []string{drop[0].Path, filepath.VolumeName(r.files) + `\`, filepath.Join(r.files, "gone"), "relative", src}
+	paths := []string{drop[0].Path, filepath.VolumeName(r.files) + string(filepath.Separator), filepath.Join(r.files, "gone"), "relative", src}
 	bad := r.uploadFolders(prefix+"again/", paths...)
 	wantCodes := []string{"", "folder-root", "not-found", "relative", "duplicate"}
 	for i, c := range wantCodes {

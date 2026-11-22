@@ -9,7 +9,9 @@ import (
 )
 
 // vaultService is the service name of every vault entry. On Windows an entry
-// appears in Credential Manager as "s4browser:profile/<name>".
+// appears in Credential Manager as "s4browser:profile/<name>". On macOS it is a
+// generic password in the login Keychain, service "s4browser", account
+// "profile/<name>".
 const vaultService = "s4browser"
 
 // Vault stores one secret string per user name. Get and Delete return

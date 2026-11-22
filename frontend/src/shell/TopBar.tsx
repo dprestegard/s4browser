@@ -2,6 +2,7 @@ import {FormEvent, useEffect, useRef, useState} from 'react';
 import {Icon} from '../ui/Icon';
 import {Dialog, useDismiss} from '../ui/overlay';
 import {formatRemaining} from '../ui/format';
+import {osName, vaultName} from '../ui/platform';
 import {Density, ThemeSetting} from '../settings';
 import {kindLabels} from '../types';
 import {Profiles} from './useProfiles';
@@ -146,7 +147,7 @@ function ProfileMenu({profiles}: {profiles: Profiles}) {
             {dialog === 'add' && <AddKeysDialog profiles={profiles} onClose={() => setDialog('')}/>}
             {dialog === 'delete' && active && (
                 <Dialog title={`Delete ${active.name}?`} role="alertdialog" onClose={() => setDialog('')}>
-                    <p>Its keys are removed from Windows Credential Manager. This cannot be undone. Your AWS files are not touched.</p>
+                    <p>Its keys are removed from {vaultName}. This cannot be undone. Your AWS files are not touched.</p>
                     {error && <p className="t-danger" role="alert">{error}</p>}
                     <div className="actions">
                         <button type="button" className="btn" data-autofocus onClick={() => setDialog('')}>Cancel</button>
@@ -190,7 +191,7 @@ function AddKeysDialog({profiles, onClose}: {profiles: Profiles; onClose: () => 
     return (
         <Dialog title="Add access keys" onClose={onClose}>
             <form onSubmit={submit} autoComplete="off" style={{display: 'flex', flexDirection: 'column', gap: 16}}>
-                <p>The keys are stored in Windows Credential Manager. Nothing is written to your AWS files.</p>
+                <p>The keys are stored in {vaultName}. Nothing is written to your AWS files.</p>
                 <div className="field">
                     <label htmlFor="k-name">Profile name</label>
                     <input id="k-name" className="input" required data-autofocus spellCheck={false} {...field('name')}/>
@@ -245,7 +246,7 @@ function ViewMenu({theme, setTheme, density, setDensity}: {
                     <div className="label menu-heading">Theme</div>
                     {item(theme === 'dark', 'Dark', () => setTheme('dark'))}
                     {item(theme === 'light', 'Light', () => setTheme('light'))}
-                    {item(theme === 'system', 'Match Windows', () => setTheme('system'))}
+                    {item(theme === 'system', `Match ${osName}`, () => setTheme('system'))}
                     <div className="menu-sep"/>
                     <div className="label menu-heading">Rows</div>
                     {item(density === 'compact', 'Compact', () => setDensity('compact'))}

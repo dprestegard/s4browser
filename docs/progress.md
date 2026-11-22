@@ -1570,3 +1570,36 @@ Stage 4.4 (release build, README, deferred Mac checklist). It is not started her
 ### Next
 
 v1 is complete per the plan. Follow-ups, including the Mac build, are in [roadmap.md](roadmap.md). Cleaning up the stage 4.3 test objects is left to you.
+
+## Stage 5.1: Mac build
+
+**Status:** done. On a Mac with Apple silicon (macOS 27.2, Go 1.27.4, Node 26.13.1, Wails 2.17.1), `wails build -platform darwin/arm64` makes `build/bin/s4browser.app`. `go test -race -count=1 ./...`, `go vet` and `staticcheck` (both also with `-tags devfake`, and with `GOOS=windows`) and `tsc --noEmit` pass. No AWS calls were made.
+
+### What changed
+
+| Item | Behaviour | Files |
+|---|---|---|
+| Bundle | Bundle ID `com.dprestegard.s4browser`, minimum macOS 13.0 (Go 1.27's minimum). Build with `CGO_CFLAGS`/`CGO_LDFLAGS=-mmacosx-version-min=13.0`, or the linker warns, because Wails defaults to 10.13 | `build/darwin/Info.plist`, `Info.dev.plist`, README |
+| Title bar | Wails' theme calls are no-ops on macOS, so a normal title bar would follow the system appearance, not the app's theme. The title bar is hidden and inset (`mac.TitleBarHiddenInset`). On a Mac the top bar is 52 px, leaves 84 px for the traffic lights, and drags the window by its wordmark and empty space. Also an About box with the icon | `main.go`, `frontend/src/main.tsx`, `styles/shell.css` |
+| Wording | "macOS Keychain" and "Match macOS" on a Mac, from the user agent | `frontend/src/ui/platform.ts`, `shell/TopBar.tsx` |
+| No-replace rename | `renamex_np(RENAME_EXCL)` on APFS and HFS+. Then the hard link. On exFAT and FAT32, which support neither (tried on an exFAT disk image: both return `ENOTSUP`), it checks that the name is free and renames, which is not atomic | `internal/fsx/rename_darwin.go`, `rename_unix.go`, `strategy_other.go` |
+| Helper `PATH` | A `credential_process` helper on a Mac gets `/opt/homebrew/bin` and `/usr/local/bin` added to its `PATH`, because an app started from Finder has only launchd's | `internal/creds/process_other.go` |
+| Test | `TestFolderUploadOnDisk` used `\` as the volume root. It now uses the platform's separator | `transfers_folders_test.go` |
+
+### Evidence
+
+- The only test that failed on the Mac before these changes was `TestFolderUploadOnDisk` (the Windows root).
+- `TestRenameNoReplaceDarwin` passes on APFS and, with `TMPDIR` on a mounted exFAT image, on exFAT. On exFAT, `TestRenameNoReplace/link` (the bare hard link) and `TestUnsafeKeysAreRefusedWithReasons` (an AppleDouble `._dest` file appears) fail, as expected for that volume; neither runs there normally.
+- `TestHelperPathAddsHomebrew`.
+- A throwaway Keychain entry was set, read and deleted through `osVault` with no prompt.
+- The release app ran: data in `~/Library/Application Support/s4browser/` (`journal.lock`, `filedrop.log`), WebKit data in `~/Library/WebKit` and `~/Library/Caches` under the bundle ID. A second copy (`open -n`) starts and holds no journal lock.
+- In `wails dev -tags devfake` in a browser: the Mac top bar styles apply, buttons are not drag regions, and the Add keys dialog and theme menu use the Mac wording.
+
+### Not verified
+
+- **The native window was not seen:** Accessibility and Screen Recording access were not granted to Claude, so the title bar, icon, About box, Finder drops and the second copy's message were not looked at.
+- Real S3, a full volume, kill-and-relaunch, and a real `credential_process` helper. See [roadmap.md](roadmap.md).
+
+### Next
+
+The Mac release checklist in [roadmap.md](roadmap.md).

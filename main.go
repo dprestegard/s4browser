@@ -6,11 +6,15 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed build/appicon.png
+var appIcon []byte
 
 func main() {
 	// Create an instance of the app structure
@@ -30,6 +34,18 @@ func main() {
 		// page paints. The page switches the title bar when the theme changes.
 		BackgroundColour: &options.RGBA{R: 0x0F, G: 0x10, B: 0x12, A: 255},
 		Windows:          &windows.Options{Theme: windows.Dark},
+		// On macOS the page's top bar is the title bar: Wails cannot switch a
+		// Mac title bar's theme from the page, so a visible one would follow
+		// the system appearance instead of the app's theme. The traffic lights
+		// sit inset over the top bar's left end (see html[data-platform=mac]).
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarHiddenInset(),
+			About: &mac.AboutInfo{
+				Title:   "s4browser",
+				Message: "Desktop S3 client for large media transfers",
+				Icon:    appIcon,
+			},
+		},
 		OnStartup:        app.startup,
 		OnShutdown:       app.shutdown,
 		// Quitting cancels unfinished transfers, so it asks first.
