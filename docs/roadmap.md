@@ -1,6 +1,6 @@
 # Roadmap
 
-Planned work after v1.0.0. History is in [progress.md](progress.md).
+Planned work after v0.0.1. History is in [progress.md](progress.md).
 
 ## Mac release
 

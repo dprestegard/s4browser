@@ -2,7 +2,7 @@
 
 A desktop client for Amazon S3 on Windows and macOS, built for moving very large media files quickly. You browse buckets, drag files and folders in from Explorer or Finder, download files and folders, and watch a transfer queue that retries on its own. It also deletes objects, creates folders, shares presigned links and edits tags.
 
-Version 1.0.0 is for Windows 10 and 11 (x64). The Mac build (macOS 13 or later, Apple silicon) builds and passes the test suite but has not been signed or tried against real S3 yet. VPC endpoint support is planned: see [docs/roadmap.md](docs/roadmap.md).
+Version 0.0.1 is for Windows 10 and 11 (x64). The Mac build (macOS 13 or later, Apple silicon) builds and passes the test suite but has not been signed or tried against real S3 yet. VPC endpoint support is planned: see [docs/roadmap.md](docs/roadmap.md).
 
 ## Install
 
