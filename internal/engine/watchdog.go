@@ -15,12 +15,13 @@ type watchdog struct {
 	attempts map[*watchedAttempt]struct{}
 }
 
-// watchedAttempt is one attempt's stall state. Only scan touches ticks and idle.
+// watchedAttempt is one attempt's stall state. Only scan touches ticks and since.
 type watchedAttempt struct {
 	activity *AttemptActivity
 	cancel   context.CancelCauseFunc
 	ticks    uint64
-	idle     time.Duration
+	// since is when scan last saw the attempt move, or zero before its first scan.
+	since time.Time
 }
 
 func newWatchdog(timeouts Timeouts) *watchdog {
@@ -48,18 +49,20 @@ func (w *watchdog) limit(phase AttemptPhase, activity *AttemptActivity) time.Dur
 	return w.timeouts.Stall
 }
 
-// scan is one watchdog pass.
-func (w *watchdog) scan() {
+// scan is one watchdog pass at now. An attempt's idle time is the clock time
+// since a scan last saw it move, not a count of scans: ticks that arrive late
+// and then bunch up (a busy or starved process) must not make a healthy attempt
+// look stalled after a few milliseconds.
+func (w *watchdog) scan(now time.Time) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for entry := range w.attempts {
 		ticks, phase, parked := entry.activity.Observe()
-		if parked || ticks != entry.ticks {
-			entry.ticks, entry.idle = ticks, 0
+		if parked || ticks != entry.ticks || entry.since.IsZero() {
+			entry.ticks, entry.since = ticks, now
 			continue
 		}
-		entry.idle += WatchdogTick
-		if entry.idle >= w.limit(phase, entry.activity) {
+		if now.Sub(entry.since) >= w.limit(phase, entry.activity) {
 			entry.cancel(ErrStalled)
 		}
 	}
@@ -72,7 +75,7 @@ func (w *watchdog) run(clock Clock, stop <-chan struct{}) {
 	for {
 		select {
 		case <-ticker.C():
-			w.scan()
+			w.scan(clock.Now())
 		case <-stop:
 			return
 		}

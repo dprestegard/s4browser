@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync/atomic"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -131,9 +132,14 @@ func TestWatchdogCancelsOnlyIdleAttempts(t *testing.T) {
 	parked.Park()
 	_, waiting := start(AttemptAwaitResponse)
 
+	now := time.Unix(0, 0)
+	scan := func() {
+		now = now.Add(WatchdogTick)
+		dog.scan(now)
+	}
 	for range 4 {
 		busy.Touch()
-		dog.scan()
+		scan()
 	}
 	if !errors.Is(context.Cause(idle), ErrStalled) {
 		t.Fatalf("idle attempt: cause %v", context.Cause(idle))
@@ -145,10 +151,37 @@ func TestWatchdogCancelsOnlyIdleAttempts(t *testing.T) {
 		t.Fatal("the response timeout was applied too early")
 	}
 	for range 2 {
-		dog.scan()
+		scan()
 	}
 	if !errors.Is(context.Cause(waiting), ErrStalled) {
 		t.Fatalf("waiting attempt: cause %v", context.Cause(waiting))
+	}
+}
+
+// TestWatchdogMeasuresIdleTimeNotScans: scans that come close together, as
+// late ticks do on a busy machine, do not add up to a stall.
+func TestWatchdogMeasuresIdleTimeNotScans(t *testing.T) {
+	timeouts := DefaultTimeouts()
+	timeouts.Stall = WatchdogTick
+	dog := newWatchdog(timeouts)
+	ctx, cancel := context.WithCancelCause(context.Background())
+	t.Cleanup(func() { cancel(nil) })
+	activity := new(AttemptActivity)
+	activity.SetPhase(AttemptReceive)
+	dog.add(activity, cancel)
+
+	now := time.Unix(0, 0)
+	dog.scan(now)
+	for range 5 {
+		now = now.Add(time.Millisecond)
+		dog.scan(now)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("bunched scans stalled an attempt that was idle for 5 ms")
+	}
+	dog.scan(now.Add(WatchdogTick))
+	if !errors.Is(context.Cause(ctx), ErrStalled) {
+		t.Fatalf("a real stall was missed: cause %v", context.Cause(ctx))
 	}
 }
 
