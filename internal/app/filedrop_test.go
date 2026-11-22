@@ -89,3 +89,25 @@ func TestDropLogRecordsEveryPath(t *testing.T) {
 		t.Fatalf("log:\n%s", text)
 	}
 }
+
+// A drop reaches the page as one "s4:drop" event carrying the paths and kinds.
+func TestOnDropEmitsDropEvent(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.bin")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	a := New("", "")
+	var event string
+	var got Drop
+	a.emitHook = func(e string, p any) { event, got = e, p.(Drop) }
+
+	a.onDrop(5, 7, []string{file, dir})
+
+	if event != "s4:drop" {
+		t.Fatalf("event %q, want s4:drop", event)
+	}
+	if got.X != 5 || got.Y != 7 || len(got.Items) != 2 || got.Items[0].Kind != KindFile || got.Items[1].Kind != KindFolder {
+		t.Fatalf("drop: %+v", got)
+	}
+}

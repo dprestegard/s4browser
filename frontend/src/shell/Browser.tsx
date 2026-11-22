@@ -1,7 +1,8 @@
-import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
+import {KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
 import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../bindings/s4browser/internal/app/app';
 import {EventsOn} from '../wails';
+import {dropTargetProps} from '../dropTarget';
 import {Icon} from '../ui/Icon';
 import {useDismiss} from '../ui/overlay';
 import {formatDate, formatSize, formatStorageClass, plural} from '../ui/format';
@@ -541,7 +542,6 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
             count: info.count, folders: info.folders, objects: info.objects, bytes: info.bytes,
         };
     }
-    const dropStyle = (bucket ? {'--wails-drop-target': 'drop'} : {}) as CSSProperties;
     const focusRendered = total > 0 && items.some((v) => v.index === focus);
 
     return (
@@ -596,7 +596,7 @@ export function Browser({profileId, location, onNavigate, canGoBack, onBack, onS
                             onUpload={onUpload}/>
             </div>
 
-            <div className="listing-area" style={dropStyle} onKeyDown={onAreaKey}>
+            <div className="listing-area" {...dropTargetProps(!!bucket)} onKeyDown={onAreaKey}>
                 {(error || snap?.error) && (
                     <div className="banner danger" role="alert">
                         <Icon name="alert"/>
