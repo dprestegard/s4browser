@@ -1,5 +1,7 @@
 # Progress
 
+An append-only log of what each stage did and found. Entries are history: they describe the code and docs as they were at that commit. `PLAN.md` and `docs/mac-checklist.md`, named in older entries, were later merged into [implementation-plan.md](implementation-plan.md) and [roadmap.md](roadmap.md). For current behaviour see the [README](../README.md); for planned work see [roadmap.md](roadmap.md).
+
 ## Stage 0.1: toolchain, git and Wails scaffold
 
 **Status:** done. `wails build` produces `build/bin/s4browser.exe`. `go test -race ./...`, `go vet ./...` and `staticcheck ./...` all pass with `CGO_ENABLED=1`.
@@ -1567,7 +1569,4 @@ Stage 4.4 (release build, README, deferred Mac checklist). It is not started her
 
 ### Next
 
-v1 is complete per the plan. Possible follow-ups:
-- the Mac build (`docs/mac-checklist.md`)
-- a real-S3 run of the release exe
-- cleaning up the stage 4.3 test objects.
+v1 is complete per the plan. Follow-ups, including the Mac build, are in [roadmap.md](roadmap.md). Cleaning up the stage 4.3 test objects is left to you.

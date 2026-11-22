@@ -1,9 +1,18 @@
 # Build output
 build/bin/
+/s4engine.exe
+/s4credtest.exe
+*.exe~
+*.test
+*.out
+*.prof
+coverage.*
 
 # Frontend dependencies and build output
 frontend/node_modules/
 frontend/dist/
+# Written by `wails dev`/`wails build` to detect package.json changes
+frontend/package.json.md5
 
 # Local environment and credentials (never commit)
 .env
@@ -11,22 +20,34 @@ frontend/dist/
 !.env.example
 *.pem
 *.key
+*.p12
+*.pfx
 credentials*
 !credentials*.go
 *.credentials
 secrets*.json
 .aws/
 
-# Local sample media kept in the repo root (large, not source)
+# s4engine result files written to the working directory
+/s4engine-*.json
+
+# Local sample media and test data kept in the repo root (large, not source)
 /*.mkv
+/*.mov
+/*.mxf
+/*.mp4
+/*.bin
+# Download temp files left by a crash
+*.s4tmp
+
+# Claude Code: per-user settings and local launch configs
+.claude/settings.local.json
+.claude/launch.json
 
 # Editor and OS noise
 .vscode/
 .idea/
 *.swp
+.DS_Store
 Thumbs.db
 desktop.ini
-
-# s4engine build output and result files written to the working directory
-/s4engine.exe
-/s4engine-*.json

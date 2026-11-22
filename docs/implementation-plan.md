@@ -1,87 +1,87 @@
-# s4browser: full implementation plan
+# s4browser: implementation plan
 
-## Context
+This is the plan v1 was built from, kept as the record of scope and decisions. v1 is complete. What each stage did is in [progress.md](progress.md), current user-facing limits are in the [README](../README.md#known-limits), and work after v1 is in [roadmap.md](roadmap.md).
 
-`F:\s4browser\PLAN.md` defines a personal S3 desktop client for moving very large media files quickly. The folder holds only that file, so this is a new build. This plan turns it into stages that each run in a fresh session on the cheapest model that can do the work safely.
+## Goal
 
-## Decisions from the interview
+A reduced-scope, personal replacement for the S3 Browser Windows app, focused on moving very large media files quickly. The app has its own name and visual design.
 
-| Topic | Decision | Effect on PLAN.md |
+## v1 scope
+
+**In scope**
+- Sign-in with AWS CLI profiles, or static access keys stored in Windows Credential Manager
+- Browse buckets and prefixes, with up to 100,000 objects under one prefix
+- Upload files and folders, including drag-in from Explorer
+- Download files and folders
+- Delete objects and create folders
+- Transfer queue with controls for parallel files, parallel parts, part size and bandwidth cap
+- Automatic retry and in-session resume while the app stays open
+- Presigned URLs
+- View object metadata, and view/edit tags
+
+**Out of scope for v1**
+- Resume after the app closes, end-to-end checksum verification UI, folder sync/compare
+- S3-to-S3 copy/move, rename (S3 implements rename as copy + delete), storage class changes, Glacier restore, versioning UI
+- Metadata editing, drag-out, dual-pane view, tabs, recursive search, folder size calculation, preview
+- ACLs, CloudFront, browser-based SSO sign-in, S3-compatible endpoints
+
+**Assumptions**
+- One active profile at a time, with a profile switcher
+- Buckets can be added by name when a role cannot list all buckets
+- Each bucket's region is detected automatically
+- Uploads inherit the bucket's default encryption
+
+## Decisions
+
+| Topic | Decision | Effect |
 |---|---|---|
-| App name | `s4browser`, personal use | Name used for binary, config folder and vault entries |
-| Media location | Local NVMe (C:, E:, F:) | Tune for NTFS on NVMe only. HDD, SMB and exFAT are not tuned |
-| Uplink | 2 to 5 Gbps | Pass mark becomes 80% of measured line rate, replacing fixed 2.5/5 Gbps |
-| Real AWS testing | Minimal, about 10 GB | Replaces the real 100 GB and multi-TB runs. Scale is proven against a local fake S3 |
-| Credentials | Static keys and `credential_process` | Only these two are tested. Other profile types may work but are unsupported |
+| Platform | Windows first, one portable codebase | Mac deferred until after v1. Code stays portable and engine packages are compile-checked for macOS. Drag-out, signing and Mac parity are out of scope |
+| Media location | Local NVMe (NTFS) | HDD, SMB and exFAT are not tuned |
+| Uplink | 2 to 5 Gbps | Pass mark is 80% of measured line rate |
+| Real AWS testing | Minimal, about 10 GB | Scale is proven against a local fake S3 |
+| Credentials | Static keys and `credential_process` | Only these are tested. Session keys in the shared files were added as a third type in stage 1.1. Other profile types are listed but unsupported |
 | Test bucket | One real bucket, dedicated prefix | Test tooling refuses writes outside `s4browser-test/<run-id>/` |
-| Mac | Deferred until after v1 | Keep code portable, compile-check engine packages for macOS, no Mac stage |
 | Execution | New session per stage | Each stage has a self-contained brief and a model assignment |
 
-**Correction to PLAN.md:** Wails v3 is no longer beta. v3.0.0 shipped on 2026-10-26. Stay on **Wails v2.17.1** anyway, because v3 has been stable for only three weeks and v2 covers everything this app needs.
+## Stack
 
-## Toolchain
-
-Already installed: Git 2.51, AWS CLI 2.34, WebView2 runtime 157, winget, Docker. Hardware: Ryzen 9 9950X3D, 93 GB RAM, 10 GbE.
-
-Install in stage 0.1:
-
-| Tool | Version | Install |
+| Layer | Choice | Reason |
 |---|---|---|
-| Go | 1.27.4 | `winget install --id GoLang.Go --exact` |
-| Node.js (Active LTS) | 26.13.1 | `winget install --id OpenJS.NodeJS.LTS --exact` |
-| Wails CLI | v2.17.1 | `go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1` |
-| staticcheck | latest | `go install honnef.co/go/tools/cmd/staticcheck@latest` |
+| Desktop shell | Wails v2.17.1 | Go backend with a system webview. Its file-drop API gives the backend absolute paths, so file data never passes through the UI. Wails v3 shipped stable on 2026-10-26 but was too new, and v2 covers everything the app needs |
+| Backend | Go + AWS SDK for Go v2, low-level S3 client | Good fit for highly parallel I/O, and portable |
+| Transfer engine | Custom multipart engine | Direct control of part size, concurrency, bandwidth, retries and progress. `feature/s3/manager` is deprecated and `feature/s3/transfermanager` is still v0.x |
+| UI | React + TypeScript + Vite + `@tanstack/react-virtual` | Handles 100,000 rows without rendering them all |
 
-Not needed: GCC (Wails on Windows builds without CGO, but `go test -race` does need CGO, so see below), NSIS, UPX, code signing, GitHub CLI.
+Exact tool and library versions are recorded in progress.md, stage 0.1 and 0.2.
 
-**Race detector:** `go test -race` requires a C toolchain on Windows. Stage 0.1 also installs `BrechtSanders.WinLibs.POSIX.UCRT` through winget, used only for tests. The race detector is mandatory for this engine.
+## Architecture rules
 
-Libraries: `aws-sdk-go-v2` (`service/s3` v1.115, `config` v1.33), `golang.org/x/time/rate`, `golang.org/x/sys/windows`, `zalando/go-keyring` v0.2.8, React 19, Vite, TypeScript, `@tanstack/react-virtual` v3. Stage 0.1 keeps the Vite and TypeScript versions that work with the Wails template rather than forcing the newest majors.
-
-## Architecture
-
-```
-F:\s4browser
-├─ main.go, app.go           Wails entry point and bindings (thin)
-├─ cmd/s4engine/             Headless CLI for M0 and benchmarks
-├─ internal/engine/          Scheduler, upload, download, retry, limiter, progress
-├─ internal/journal/         On-disk list of active multipart upload IDs
-├─ internal/fsx/             NTFS write strategies, path safety (build-tagged)
-├─ internal/s3x/             Client factory, tuned transport, region cache, listing
-├─ internal/creds/           Profiles, static keys in vault, credential_process
-├─ internal/objects/         Delete, create folder, presign, metadata, tags
-├─ internal/fakes3/          Test server: synthetic data and fault injection
-├─ frontend/                 React UI
-└─ docs/                     implementation-plan.md, engine-design.md, progress.md
-```
-
-Key design rules:
+These held through v1. The engine's own contracts are in [engine-design.md](engine-design.md).
 
 - **File data never crosses the UI bridge.** Drops deliver absolute paths to Go.
 - **Go owns the listing.** The UI requests visible row windows, and Go sorts. This keeps 100,000 rows out of webview memory.
 - **Progress is batched** and sent to the UI about 5 times per second.
-- **Uploads** use `io.SectionReader` over a shared file handle, so memory does not scale with part size. Parts carry CRC32 checksums.
-- **Downloads** use `If-Match` on the ETag, so an object replaced mid-transfer fails clearly instead of producing a corrupt file.
+- **Uploads** read each part with `io.SectionReader` over a shared file handle, so memory does not scale with part size. Parts carry CRC32 checksums.
+- **Part size** is the larger of the user's setting and `object size / 10,000`, rounded up to 1 MiB, within S3's 5 MiB to 5 GiB limits.
+- **Downloads** use parallel ranged GETs with `If-Match` on the ETag into a temp file that is renamed on completion, so an object replaced mid-transfer fails clearly.
 - **Stalled connections** are cancelled by an idle-byte watchdog and retried.
 - **Engine retries own the policy.** SDK retries are disabled on part requests so attempts are not multiplied.
 - **Limiter and concurrency settings** can be changed while transfers run.
-
-Risks the original plan did not cover:
-
-- **Path traversal:** S3 keys containing `..` or absolute paths must never write outside the chosen download folder.
-- **`credential_process` console flash:** a GUI app launching a console helper can pop up a window on Windows. Stage 1.1 must run the helper hidden, which may need a custom provider.
-- **Presign expiry:** the effective expiry is the shortest of the requested time, 7 days and the credential's own expiry.
-- **Versioned buckets:** delete creates delete markers, so the confirmation wording must say so.
-- **Disk space:** check free space before starting a download.
+- **Credentials refresh.** A long transfer outlasts a role session, so an expired credential pauses the job, keeps completed parts, and continues when credentials return.
+- **Orphaned uploads are aborted.** An on-disk journal of active upload IDs lets the next launch abort leftovers after a crash.
+- **Downloads are path-safe.** Keys with `..`, absolute paths, or names Windows cannot hold are reported and never written, and an existing local file is never overwritten.
+- **`credential_process` helpers run hidden**, so a console window never flashes.
+- **Presign expiry** is the shortest of the requested time, 7 days and the credential's own expiry.
+- **Free space is checked** before a download starts.
 
 ## Stages
 
-Each stage runs in a new session. It reads `docs/implementation-plan.md`, `docs/engine-design.md` and the last entry in `docs/progress.md`, finishes its done criteria, commits, and appends a short handoff note.
+Each stage ran in a new session. It read this plan, `engine-design.md` and the last entry in `progress.md`, finished its done criteria, committed, and appended a handoff note.
 
 | Stage | Work | Model | Done when |
 |---|---|---|---|
 | **M0: prove the risky parts** | | | |
-| 0.1 | Install tools, `git init`, scaffold Wails, copy this plan into `docs/` | Haiku | `wails build` produces an exe, `go test -race ./...` runs |
+| 0.1 | Install tools, `git init`, scaffold Wails | Haiku | `wails build` produces an exe, `go test -race ./...` runs |
 | 0.2 | Engine design: interfaces, job state machine, error taxonomy, concurrency model | **Opus** | `docs/engine-design.md` and compiling Go interfaces |
 | 0.3 | Fake S3 with synthetic data, fault injection, and test-prefix guard | Sonnet | Multipart and ranged GET pass, faults are scriptable |
 | 0.4 | Scheduler, limiter, part sizing, upload path | **Opus** | Simulated 2 TB upload passes under race detector with bounded memory |
@@ -91,7 +91,7 @@ Each stage runs in a new session. It reads `docs/implementation-plan.md`, `docs/
 | **M1: connect and browse** | | | |
 | 1.1 | Profiles, vault storage, `credential_process`, profile switching | Sonnet | Both credential types work, helper runs hidden |
 | 1.2 | Bucket list, add by name, region detection, progressive listing | Sonnet | 100,000 fake objects list, sort and page in Go |
-| 1.3 | App shell and visual design system | **Opus** | Shell and tokens approved by you |
+| 1.3 | App shell and visual design system | **Opus** | Shell and tokens approved |
 | 1.4 | Virtualized browser table and navigation | Sonnet | 100,000 rows scroll and sort smoothly |
 | **M2: transfers** | | | |
 | 2.1 | Retry, pause, in-session resume, credential recovery, orphan cleanup | **Opus** | Fault suite passes, including kill and relaunch |
@@ -101,35 +101,13 @@ Each stage runs in a new session. It reads `docs/implementation-plan.md`, `docs/
 | **M3: object operations** | | | |
 | 3.1 | Delete, create folder, presign, metadata view, tag editing | Sonnet | All operations pass against fake S3 and in the UI |
 | **M4: hardening** | | | |
-| 4.1 | Independent review of engine, journal and path safety | **Opus** | Findings are filed and ranked |
+| 4.1 | Independent review of engine, journal and path safety | **Opus** | Findings are filed and ranked ([review-4.1.md](review-4.1.md)) |
 | 4.2 | Fix findings, run the full automated suite | Sonnet | Suite is green under race detector |
-| 4.3 | Real AWS verification with your hands-on checks | Sonnet | Verification checklist is complete |
+| 4.3 | Real AWS verification with hands-on checks | Sonnet | Verification checklist is complete |
 | 4.4 | Release build, README, deferred Mac checklist | Haiku | Exe runs from a clean folder |
-| 4.5 | Listing refresh after transfers, location kept across a window reload (requirements R1, R2 below, found in stage 4.3) | Sonnet | Both requirements pass in `wails dev` and the built exe |
-
-**Model rationale:** Opus handles the 6 stages where a subtle mistake is expensive or judgment sets direction: engine contracts, concurrency core, failure recovery, the performance gate, visual design and final review. Sonnet implements against those contracts. Haiku handles only mechanical setup and packaging.
+| 4.5 | Listing refresh after uploads, location kept across a window reload, and smaller fixes found in 4.3 | Sonnet | Both pass in `wails dev` and the built exe |
 
 **Escalate from Sonnet to Opus when:** a race or deadlock survives two fix attempts, an engine contract must change, a throughput target is missed, or data integrity is in doubt.
-
-## Requirements added during verification
-
-Found by the user in stage 4.3 (2026-11-20). Stage 4.5 implements them. They may be done before the 4.4 release build.
-
-- **R1, refresh after upload:** when uploads finish into the bucket and folder being shown, the listing updates to show the new objects without the user reloading. This includes uploads of folders, whose objects land in subfolders of the one shown. A reload must keep the selection and scroll position where the rows still exist.
-- **R2, keep the location on reload:** reloading the window (for example the WebView's right-click Refresh) must come back to the same profile, bucket and folder, not to "Open a bucket". Refresh should mean "reload this folder's listing". Either the WebView's own context menu and reload shortcut are replaced by the app's reload, or the location is restored after the page reloads. Transfers are not affected, because they live in Go.
-
-Smaller issues seen in the same run, also for stage 4.5:
-
-- **The bucket list does not recover when credentials return.** If it fails while a profile's credentials are bad, it stays empty after they work again, until the window is reloaded. It should retry on `OnCredentialsChanged`, as transfers do.
-- **The deferred-cleanup warning stays after the cleanup ran.** "An unfinished upload … will be cleaned up when the credentials … work again" is still shown once the upload has been aborted. It should be replaced by the result or removed.
-- **The profile badge says "expired" for a `credential_process` profile whose helper has already handed out new credentials.** It shows the expiry of the credentials it last saw, not of the cache.
-
-## What you need to do
-
-- **Before 0.7:** provide the AWS profile, bucket name and region, plus a measured speed test result. Confirm whether the bucket has versioning on, because deleted test objects would otherwise keep costing money.
-- **At 0.7:** decide go or no-go from the results.
-- **At 1.3:** approve the visual design.
-- **At 4.3:** perform drag-in checks and the credential expiry test.
 
 ## Verification
 

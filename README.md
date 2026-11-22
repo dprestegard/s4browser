@@ -2,7 +2,7 @@
 
 A Windows desktop client for Amazon S3, built for moving very large media files quickly. You browse buckets, drag files and folders in from Explorer, download files and folders, and watch a transfer queue that retries on its own. It also deletes objects, creates folders, shares presigned links and edits tags.
 
-Version 1.0.0 is for Windows 10 and 11 (x64). A Mac build is deferred: see [docs/mac-checklist.md](docs/mac-checklist.md).
+Version 1.0.0 is for Windows 10 and 11 (x64). A Mac build and VPC endpoint support are planned: see [docs/roadmap.md](docs/roadmap.md).
 
 ## Install
 
@@ -107,7 +107,8 @@ Also run `go vet ./...`, `staticcheck ./...` and `npx tsc --noEmit` in `frontend
 
 ## Documentation
 
-- [docs/implementation-plan.md](docs/implementation-plan.md): scope, stages and verification.
-- [docs/engine-design.md](docs/engine-design.md): the transfer engine.
-- [docs/progress.md](docs/progress.md): what each stage did and found.
-- [docs/review-4.1.md](docs/review-4.1.md): the engine review.
+- [docs/roadmap.md](docs/roadmap.md): planned work after v1 (Mac build, VPC endpoints).
+- [docs/engine-design.md](docs/engine-design.md): the transfer engine's normative design.
+- [docs/implementation-plan.md](docs/implementation-plan.md): v1 scope, decisions and stages.
+- [docs/progress.md](docs/progress.md): what each stage did and found (history).
+- [docs/review-4.1.md](docs/review-4.1.md): the engine review and its findings.
