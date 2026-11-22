@@ -1603,3 +1603,26 @@ v1 is complete per the plan. Follow-ups, including the Mac build, are in [roadma
 ### Next
 
 The Mac release checklist in [roadmap.md](roadmap.md).
+
+## Stage 5.2: CI builds
+
+**Status:** done on branch `ci/build-workflow`. `.github/workflows/build.yml` builds `s4browser-<version>-windows-amd64.exe` on `windows-latest` and `s4browser-<version>-macos-universal.zip` on `macos-latest`, after the frontend build (which runs `tsc`), `go vet` and `staticcheck` (both also with `-tags devfake`), `go test -race -short -count=1 ./...`, and on Windows `go run ./tools/notices -check`. It runs on `v*` tags and by hand only. A tag must match `productVersion` and creates a draft GitHub Release.
+
+### What changed
+
+| Item | Behaviour | Files |
+|---|---|---|
+| Workflow | One job per OS (checks, then build), Go 1.27.4 exact (the notices file records it), Node 26, Wails 2.17.1, staticcheck 2026.2.2. The frontend is built before vet, because `main.go` embeds `frontend/dist`. Actions are on their Node 24 majors | `.github/workflows/build.yml` |
+| Mac build | `darwin/universal` with `-mmacosx-version-min=13.0`. `lipo` must report both architectures. Zipped with `ditto` to keep the ad hoc signature | same |
+| Docs | CI builds section, quarantine note, roadmap notes on universal builds and signing secrets | README, `docs/roadmap.md` |
+
+### Evidence
+
+- Run 44991003548: both jobs pass. Every package passes `-race -short` on both OSes, `notices -check` passes, and `lipo` reports `x86_64 arm64`.
+- Duration: macOS about 6 to 7 minutes and Windows about 12 to 15 minutes, so roughly 90 to 100 billed minutes per run in this private repo (macOS at 10x, Windows at 2x).
+- `-short` skips the 32 GiB and 2 TiB engine runs and the 100,000-object listing, so CI does not run them.
+
+### Not verified
+
+- **The release job has not run:** no `v*` tag has been pushed.
+- **The CI-built apps were not launched,** neither the exe on Windows nor the universal app on a Mac. The universal app has not run on an Intel Mac.
