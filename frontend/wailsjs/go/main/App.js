@@ -70,6 +70,10 @@ export function Info() {
   return window['go']['main']['App']['Info']();
 }
 
+export function Licenses() {
+  return window['go']['main']['App']['Licenses']();
+}
+
 export function ListingKeys(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ListingKeys'](arg1, arg2, arg3, arg4, arg5);
 }

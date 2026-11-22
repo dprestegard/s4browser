@@ -39,6 +39,8 @@ export function DiscardDelete(arg1:string):Promise<void>;
 
 export function Info():Promise<main.StartInfo>;
 
+export function Licenses():Promise<string>;
+
 export function ListingKeys(arg1:string,arg2:string,arg3:boolean,arg4:number,arg5:Array<any>):Promise<Array<string>>;
 
 export function ListingLocate(arg1:string,arg2:string,arg3:boolean,arg4:Array<string>):Promise<Array<number>>;

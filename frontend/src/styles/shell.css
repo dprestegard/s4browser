@@ -15,6 +15,15 @@
     background: var(--bg0); border-bottom: 1px solid var(--line);
     min-width: 0;
 }
+/* macOS: the top bar is the window's title bar (main.go, TitleBarHiddenInset).
+   It is taller to centre the traffic lights, leaves room for them on the left,
+   and drags the window everywhere but its controls. */
+html[data-platform=mac] { --topbar-h: 52px; }
+html[data-platform=mac] .topbar { padding-left: 84px; --wails-draggable: drag; }
+html[data-platform=mac] .topbar * { --wails-draggable: no-drag; }
+html[data-platform=mac] .topbar .wordmark,
+html[data-platform=mac] .topbar .wordmark *,
+html[data-platform=mac] .topbar .spacer { --wails-draggable: drag; }
 .wordmark { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 14px; letter-spacing: -.01em; }
 .wordmark .icon { width: 18px; height: 18px; color: var(--accent); }
 .vsep { width: 1px; height: 20px; background: var(--line2); flex: none; }
@@ -122,7 +131,7 @@
 .skel { display: block; height: 10px; width: 40%; border-radius: 3px; background: var(--bg3); }
 .table-scroll:focus { outline: none; }
 
-/* Shown by Wails while files from Explorer are over the listing. */
+/* Shown by Wails while files from Explorer or Finder are over the listing. */
 .drop-overlay {
     position: absolute; inset: 12px; z-index: 5; display: none;
     flex-direction: column; align-items: center; justify-content: center; gap: 10px;
