@@ -1,5 +1,5 @@
 import {FormEvent, useEffect, useRef, useState} from 'react';
-import {CancelObjectWork, CreateFolder, DiscardDelete, PrepareDelete, PresignObject, RunDelete} from '../../wailsjs/go/main/App';
+import {CancelObjectWork, CreateFolder, DiscardDelete, PrepareDelete, PresignObject, RunDelete} from '../../wailsjs/go/app/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Dialog} from '../ui/overlay';
 import {Icon} from '../ui/Icon';

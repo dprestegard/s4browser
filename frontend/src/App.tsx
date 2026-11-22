@@ -1,6 +1,6 @@
 import {useCallback, useEffect, useRef, useState} from 'react';
 import {EventsOn, OnFileDrop} from '../wailsjs/runtime/runtime';
-import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../wailsjs/go/main/App';
+import {ChooseDownloadFolder, ChooseUploadFiles, ChooseUploadFolder, StartDownloads, StartUploads} from '../wailsjs/go/app/App';
 import {Density, readSavedLocation, saveLocation, ThemeSetting, useAppliedTheme, useSetting} from './settings';
 import {useProfiles} from './shell/useProfiles';
 import {useQueue} from './shell/useQueue';

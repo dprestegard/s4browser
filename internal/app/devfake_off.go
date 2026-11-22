@@ -1,6 +1,6 @@
 //go:build !devfake
 
-package main
+package app
 
 import (
 	"s4browser/internal/browse"

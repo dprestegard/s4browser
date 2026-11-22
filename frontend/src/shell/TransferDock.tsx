@@ -1,6 +1,6 @@
 import {CSSProperties, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {useVirtualizer} from '@tanstack/react-virtual';
-import {CancelAll, CancelJob, ClearFinished, PauseAll, PauseJob, RemoveJob, ResumeAll, ResumeJob, RetryJob} from '../../wailsjs/go/main/App';
+import {CancelAll, CancelJob, ClearFinished, PauseAll, PauseJob, RemoveJob, ResumeAll, ResumeJob, RetryJob} from '../../wailsjs/go/app/App';
 import {Icon, IconName} from '../ui/Icon';
 import {Dialog, useDismiss} from '../ui/overlay';
 import {formatEta, formatRate, formatSize, plural} from '../ui/format';

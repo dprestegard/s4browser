@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
-import {QueueJobs, SetTransferSettings, TransferSettings as FetchSettings, TransferStatus} from '../../wailsjs/go/main/App';
+import {QueueJobs, SetTransferSettings, TransferSettings as FetchSettings, TransferStatus} from '../../wailsjs/go/app/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {JobView, QueueEvent, QueueStatus, SettingsState, TransferSettings} from '../types';
 

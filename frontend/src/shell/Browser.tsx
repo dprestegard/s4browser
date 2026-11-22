@@ -1,6 +1,6 @@
 import {CSSProperties, KeyboardEvent, MouseEvent, useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {defaultRangeExtractor, useVirtualizer} from '@tanstack/react-virtual';
-import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/main/App';
+import {CloseListing, ListingKeys, ListingLocate, ListingSummary, ListingWindow as FetchWindow, OpenListing} from '../../wailsjs/go/app/App';
 import {EventsOn} from '../../wailsjs/runtime/runtime';
 import {Icon} from '../ui/Icon';
 import {useDismiss} from '../ui/overlay';

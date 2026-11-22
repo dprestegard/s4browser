@@ -8,6 +8,8 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
+
+	"s4browser/internal/app"
 )
 
 //go:embed all:frontend/dist
@@ -16,9 +18,20 @@ var assets embed.FS
 //go:embed build/appicon.png
 var appIcon []byte
 
+// The app ships as a single file on Windows, so its license and the notices of
+// the third-party software inside it travel in the binary and are shown by the
+// Licenses dialog. Regenerate the notices with go run ./tools/notices.
+
+//go:embed LICENSE
+var licenseText string
+
+//go:embed THIRD_PARTY_NOTICES.txt
+var noticesText string
+
 func main() {
 	// Create an instance of the app structure
-	app := NewApp()
+	a := app.New(licenseText, noticesText)
+	hooks := app.LifecycleHooks(a)
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -46,15 +59,15 @@ func main() {
 				Icon:    appIcon,
 			},
 		},
-		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		OnStartup:  hooks.OnStartup,
+		OnShutdown: hooks.OnShutdown,
 		// Quitting cancels unfinished transfers, so it asks first.
-		OnBeforeClose: app.beforeClose,
+		OnBeforeClose: hooks.OnBeforeClose,
 		// Native file drop: the window resolves dropped files and folders to
 		// absolute paths in Go. File data never crosses the UI bridge.
 		DragAndDrop: &options.DragAndDrop{EnableFileDrop: true},
 		Bind: []interface{}{
-			app,
+			a,
 		},
 	})
 

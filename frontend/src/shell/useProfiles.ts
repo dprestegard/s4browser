@@ -6,7 +6,7 @@ import {
     DeleteProfile,
     Profiles as LoadProfiles,
     SelectProfile,
-} from '../../wailsjs/go/main/App';
+} from '../../wailsjs/go/app/App';
 import {CredentialStatus, ProfileState} from '../types';
 
 // Profile list, the active profile and whether its credentials load. Loading

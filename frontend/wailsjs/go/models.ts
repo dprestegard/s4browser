@@ -1,3 +1,181 @@
+export namespace app {
+	
+	export class DeletePreview {
+	    id: string;
+	    bucket: string;
+	    prefix: string;
+	    objects: number;
+	    bytes: number;
+	    folders: number;
+	    selected: number;
+	    placeholders: number;
+	    sample: string[];
+	    versioning: string;
+	    versioningError?: string;
+	    transfers: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DeletePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.bucket = source["bucket"];
+	        this.prefix = source["prefix"];
+	        this.objects = source["objects"];
+	        this.bytes = source["bytes"];
+	        this.folders = source["folders"];
+	        this.selected = source["selected"];
+	        this.placeholders = source["placeholders"];
+	        this.sample = source["sample"];
+	        this.versioning = source["versioning"];
+	        this.versioningError = source["versioningError"];
+	        this.transfers = source["transfers"];
+	    }
+	}
+	export class DownloadSelection {
+	    profileId: string;
+	    bucket: string;
+	    region: string;
+	    listingId: string;
+	    field: string;
+	    desc: boolean;
+	    version: number;
+	    ranges: number[][];
+	    destDir: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DownloadSelection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.bucket = source["bucket"];
+	        this.region = source["region"];
+	        this.listingId = source["listingId"];
+	        this.field = source["field"];
+	        this.desc = source["desc"];
+	        this.version = source["version"];
+	        this.ranges = source["ranges"];
+	        this.destDir = source["destDir"];
+	    }
+	}
+	export class ObjectSelection {
+	    profileId: string;
+	    bucket: string;
+	    listingId: string;
+	    field: string;
+	    desc: boolean;
+	    version: number;
+	    ranges: number[][];
+	
+	    static createFrom(source: any = {}) {
+	        return new ObjectSelection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profileId = source["profileId"];
+	        this.bucket = source["bucket"];
+	        this.listingId = source["listingId"];
+	        this.field = source["field"];
+	        this.desc = source["desc"];
+	        this.version = source["version"];
+	        this.ranges = source["ranges"];
+	    }
+	}
+	export class ProfileCheck {
+	    ok: boolean;
+	    message?: string;
+	    keyHint?: string;
+	    // Go type: time
+	    expires?: any;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfileCheck(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.message = source["message"];
+	        this.keyHint = source["keyHint"];
+	        this.expires = this.convertValues(source["expires"], null);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ProfileState {
+	    profiles: creds.Profile[];
+	    activeId: string;
+	    warnings?: string[];
+	    error?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ProfileState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.profiles = this.convertValues(source["profiles"], creds.Profile);
+	        this.activeId = source["activeId"];
+	        this.warnings = source["warnings"];
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StartInfo {
+	    logPath: string;
+	    logError?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StartInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.logPath = source["logPath"];
+	        this.logError = source["logError"];
+	    }
+	}
+
+}
+
 export namespace browse {
 	
 	export class Bucket {
@@ -282,184 +460,6 @@ export namespace creds {
 	        this.keyHint = source["keyHint"];
 	        this.supported = source["supported"];
 	        this.problem = source["problem"];
-	    }
-	}
-
-}
-
-export namespace main {
-	
-	export class DeletePreview {
-	    id: string;
-	    bucket: string;
-	    prefix: string;
-	    objects: number;
-	    bytes: number;
-	    folders: number;
-	    selected: number;
-	    placeholders: number;
-	    sample: string[];
-	    versioning: string;
-	    versioningError?: string;
-	    transfers: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new DeletePreview(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.bucket = source["bucket"];
-	        this.prefix = source["prefix"];
-	        this.objects = source["objects"];
-	        this.bytes = source["bytes"];
-	        this.folders = source["folders"];
-	        this.selected = source["selected"];
-	        this.placeholders = source["placeholders"];
-	        this.sample = source["sample"];
-	        this.versioning = source["versioning"];
-	        this.versioningError = source["versioningError"];
-	        this.transfers = source["transfers"];
-	    }
-	}
-	export class DownloadSelection {
-	    profileId: string;
-	    bucket: string;
-	    region: string;
-	    listingId: string;
-	    field: string;
-	    desc: boolean;
-	    version: number;
-	    ranges: number[][];
-	    destDir: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new DownloadSelection(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.profileId = source["profileId"];
-	        this.bucket = source["bucket"];
-	        this.region = source["region"];
-	        this.listingId = source["listingId"];
-	        this.field = source["field"];
-	        this.desc = source["desc"];
-	        this.version = source["version"];
-	        this.ranges = source["ranges"];
-	        this.destDir = source["destDir"];
-	    }
-	}
-	export class ObjectSelection {
-	    profileId: string;
-	    bucket: string;
-	    listingId: string;
-	    field: string;
-	    desc: boolean;
-	    version: number;
-	    ranges: number[][];
-	
-	    static createFrom(source: any = {}) {
-	        return new ObjectSelection(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.profileId = source["profileId"];
-	        this.bucket = source["bucket"];
-	        this.listingId = source["listingId"];
-	        this.field = source["field"];
-	        this.desc = source["desc"];
-	        this.version = source["version"];
-	        this.ranges = source["ranges"];
-	    }
-	}
-	export class ProfileCheck {
-	    ok: boolean;
-	    message?: string;
-	    keyHint?: string;
-	    // Go type: time
-	    expires?: any;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProfileCheck(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.ok = source["ok"];
-	        this.message = source["message"];
-	        this.keyHint = source["keyHint"];
-	        this.expires = this.convertValues(source["expires"], null);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class ProfileState {
-	    profiles: creds.Profile[];
-	    activeId: string;
-	    warnings?: string[];
-	    error?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ProfileState(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.profiles = this.convertValues(source["profiles"], creds.Profile);
-	        this.activeId = source["activeId"];
-	        this.warnings = source["warnings"];
-	        this.error = source["error"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class StartInfo {
-	    logPath: string;
-	    logError?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new StartInfo(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.logPath = source["logPath"];
-	        this.logError = source["logError"];
 	    }
 	}
 

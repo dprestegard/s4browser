@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -42,10 +42,15 @@ type App struct {
 	// writeGuard, when set, refuses writes outside one key prefix. It comes from
 	// S4_WRITE_PREFIX (see guard.go). Nil allows all writes.
 	writeGuard engine.WriteGuard
+	// licenseText and noticesText are shown by the Licenses dialog.
+	licenseText, noticesText string
 }
 
-// NewApp creates the App.
-func NewApp() *App { return &App{} }
+// New creates the App. licenseText and noticesText are the texts the Licenses
+// dialog shows.
+func New(licenseText, noticesText string) *App {
+	return &App{licenseText: licenseText, noticesText: noticesText}
+}
 
 // logPath is where the spike logs drops: %AppData%\s4browser\filedrop.log on
 // Windows.
@@ -128,4 +133,18 @@ func (a *App) Info() StartInfo {
 		return StartInfo{LogPath: a.log.Path()}
 	}
 	return StartInfo{LogError: a.logErr}
+}
+
+// Hooks are the window lifecycle callbacks wails.Run takes. They are a package
+// function rather than App methods because Wails binds every exported method of
+// App to the frontend, and the page must not be able to call these.
+type Hooks struct {
+	OnStartup     func(context.Context)
+	OnShutdown    func(context.Context)
+	OnBeforeClose func(context.Context) bool
+}
+
+// LifecycleHooks returns a's lifecycle callbacks.
+func LifecycleHooks(a *App) Hooks {
+	return Hooks{OnStartup: a.startup, OnShutdown: a.shutdown, OnBeforeClose: a.beforeClose}
 }
