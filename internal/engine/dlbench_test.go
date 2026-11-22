@@ -7,7 +7,7 @@ package engine_test
 // of one file in flight at once, each at its own offset.
 //
 // It is skipped unless S4_BENCH_DIR is set, and it only ever writes inside
-// F:\s4browser-bench. See docs/progress.md for how to run it.
+// F:\s4browser-bench. The environment variables that configure it are listed above TestDownloadWriteBenchmark.
 
 import (
 	"context"

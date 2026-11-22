@@ -16,10 +16,10 @@ import (
 	"s4browser/internal/queue"
 )
 
-// App is the stage 0.6 file-drop spike. It has no engine and no S3 access: it
-// only receives dropped paths from the native window, classifies them in Go and
-// shows and logs the result. File contents never reach the frontend, and no
-// path leaves this process.
+// App is the Wails service the frontend calls. It owns the profile, browse and
+// transfer services, the object commands (delete, new folder, share link, tags),
+// native file drop, the quit confirmation and the Licenses dialog. Dropped paths
+// are classified in Go and logged. File contents never reach the frontend.
 type App struct {
 	ctx context.Context
 	// wapp and window are set by Attach before the app runs.

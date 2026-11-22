@@ -198,7 +198,7 @@ func classify(sc config.SharedConfig) Kind {
 // roleChainSupported follows source_profile links to the profile that holds the
 // first credentials. A role is supported over a login, static or session
 // profile. A credential_process root is refused: the SDK would run that helper
-// itself, which opens a console window from a GUI app (see docs/progress.md).
+// itself, which opens a console window from a GUI app.
 func roleChainSupported(sc config.SharedConfig) bool {
 	for range 8 {
 		if sc.Source != nil {

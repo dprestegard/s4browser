@@ -152,9 +152,8 @@ func (okProber) Probe(context.Context, engine.ObjectRef) error { return nil }
 // awsCredentials holds the credential chain of one profile.
 type awsCredentials struct {
 	cfg aws.Config
-	// provider is aws.NewCredentialsCache(s3x.MarkCredentialErrors(base)), as
-	// docs/progress.md requires, so provider failures match
-	// engine.ErrCredentialsUnavailable.
+	// provider is aws.NewCredentialsCache(s3x.MarkCredentialErrors(base)),
+	// so provider failures match engine.ErrCredentialsUnavailable.
 	provider *aws.CredentialsCache
 	// loaded is the SDK's own cache around the chain. Probe empties both caches,
 	// otherwise a refresh would return the old value.
