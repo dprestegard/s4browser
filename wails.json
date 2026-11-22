@@ -11,7 +11,7 @@
   },
   "info": {
     "productName": "s4browser",
-    "productVersion": "1.0.0",
+    "productVersion": "0.0.1",
     "copyright": "Copyright 2026 Derek Prestegard",
     "comments": "Desktop S3 client for large media transfers"
   }
