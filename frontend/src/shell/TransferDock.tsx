@@ -97,7 +97,9 @@ function JobRow({j, style, run}: {j: JobView; style: CSSProperties; run: (f: () 
     );
 }
 
-export function TransferDock({open, onToggle, height, queue, busy, last, onDismissLast, notice, onDismissNotice}: {
+export function TransferDock({open, onToggle, height, queue, busy, last, onDismissLast, notice, onDismissNotice, settingsRequest}: {
+    /** Changes when something else (the top bar) asks for the transfer settings. */
+    settingsRequest: number;
     open: boolean;
     onToggle: () => void;
     height: number;
@@ -112,6 +114,7 @@ export function TransferDock({open, onToggle, height, queue, busy, last, onDismi
     const [tab, setTab] = useState<QueueTab>('progress');
     const [dialog, setDialog] = useState<'' | 'settings' | 'cancel-all' | 'refusals'>('');
     const [menuOpen, setMenuOpen] = useState(false);
+    useEffect(() => { if (settingsRequest > 0) setDialog('settings'); }, [settingsRequest]);
     const [cmdError, setCmdError] = useState('');
     const [hidden, setHidden] = useState<string[]>([]);
     const [rowH, setRowH] = useState(readQueueRowHeight);

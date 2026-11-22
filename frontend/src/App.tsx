@@ -56,6 +56,7 @@ export default function App() {
     const [busy, setBusy] = useState('');
     const [last, setLast] = useState<LastSubmit | null>(null);
     const [notice, setNotice] = useState('');
+    const [settingsRequest, setSettingsRequest] = useState(0);
     const [pendingDrop, setPendingDrop] = useState<PendingDrop | null>(null);
     const [fresh, setFresh] = useState(0);
     const [refresh, setRefresh] = useState(0);
@@ -228,7 +229,8 @@ export default function App() {
         <div className="app">
             <TopBar profiles={profiles} theme={theme} setTheme={setTheme} density={density} setDensity={setDensity}
                     detailsOpen={detailsOpen} toggleDetails={() => setDetailsOpen(!detailsOpen)}
-                    bandwidth={capSummary(queue.settings?.current)}/>
+                    bandwidth={capSummary(queue.settings?.current)}
+                    onBandwidth={() => { setDockOpen(true); setSettingsRequest((n) => n + 1); }}/>
             <div className="workspace">
                 <Sidebar profileId={profileId} current={location?.bucket ?? ''} width={sidebarWidth}
                          onOpen={(b) => go({bucket: b.name, prefix: '', region: b.region})}/>
@@ -248,7 +250,7 @@ export default function App() {
                 {dockOpen && (
                     <Splitter dir="h" value={dockHeight} min={120} max={maxDock} sign={-1} onChange={setDockHeight} label="Resize transfers"/>
                 )}
-                <TransferDock open={dockOpen} onToggle={() => setDockOpen(!dockOpen)} height={Math.min(dockHeight, maxDock)}
+                <TransferDock settingsRequest={settingsRequest} open={dockOpen} onToggle={() => setDockOpen(!dockOpen)} height={Math.min(dockHeight, maxDock)}
                               queue={queue} busy={busy} last={last} onDismissLast={() => setLast(null)}
                               notice={notice} onDismissNotice={() => setNotice('')}/>
             </div>
