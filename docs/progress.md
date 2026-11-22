@@ -656,7 +656,9 @@ The user ran the manual drop test from stage 0.6 and reported that it passed. It
 | `static` | Keys in the shared AWS files | Re-read by `Manager.Refresh` |
 | `session` | Temporary keys and a token in the shared AWS files, written by an external sign-in tool (found in stage 0.7) | Re-read by `Manager.Refresh` after a new sign-in |
 | `credential-process` | Helper command in the AWS config | Run again before expiry, one minute ahead |
-| `other` | Role, SSO, web identity | Listed as unsupported. Left to the SDK |
+| `login` | Profile written by `aws login` (`login_session`) | The SDK's login provider reads the CLI's token cache (`~/.aws/login/cache`, or `AWS_LOGIN_CACHE_DIRECTORY`) and refreshes it. A refresh rewrites that cache file, as the CLI does. An expired or missing session gives `ErrLoginExpired` naming the `aws login --profile` command |
+| `role` | `role_arn` over a login, static or session profile | Over static or session keys the SDK does the whole chain. Over a login profile the app builds it itself (`retrieveLoginRole`): the pinned SDK's loader rejects that profile, because `hasCredentials` ignores `login_session` (checked in config v1.33.20 and v1.33.21). One hop only, no `mfa_serial`. Roles over `credential_process` are refused, see below |
+| `other` | SSO, web identity, `credential_source` | Listed as unsupported. Left to the SDK |
 
 - **Profile IDs are `app:<name>` or `aws:<name>`.** Use the ID as `engine.ObjectRef.Profile`.
 - **On disk:** `%AppData%\s4browser\profiles.json` holds names, regions, the last four characters of the access key ID and the active ID. It holds no key material.
@@ -694,7 +696,8 @@ The user ran the manual drop test from stage 0.6 and reported that it passed. It
 - **`Refresh` proves only that credentials load.** It does not contact AWS, so an expired session whose file is unchanged still loads. Stage 2.1 must not treat that as recovery.
 - **A refresh the caller abandons keeps running.** The SDK's cache detaches it from the caller's context, so the helper can run for up to one minute. Concurrent refreshes share that run.
 - **Helpers that prompt on the console fail,** because the helper has no stdin. A helper that opens its own sign-in window should still work, but this was not tried.
-- **Unsupported role profiles can still flash a console** if their `source_profile` uses `credential_process`, because that path stays inside the SDK.
+- **Role profiles over `credential_process` are now refused,** because the SDK would run that helper itself and flash a console.
+- **`aws login` and role-over-login have only been run against fake token files and a fake STS endpoint.** No real `aws login` session has been tried, and the refresh path (an expired access token that needs the sign-in service) has no test. Login tokens are short-lived, so expiry during a long transfer is unverified.
 - **A credentials file saved with a UTF-8 byte order mark loses its first profile.** The SDK does not recognise that section, so the app lists it as having no credentials.
 - **macOS has no process containment.** Cancelling there ends only the shell. Mac work is deferred.
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +15,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aws/aws-sdk-go-v2/credentials/logincreds"
 
 	"s4browser/internal/engine"
 )
@@ -175,6 +180,18 @@ sso_region = us-east-1
 sso_start_url = https://example.invalid/start
 [profile bare]
 region = us-east-1
+[profile login]
+login_session = arn:aws:iam::123456789012:user/tester
+region = eu-west-1
+[profile rolelogin]
+role_arn = arn:aws:iam::123456789012:role/x
+source_profile = login
+[profile rolesso]
+role_arn = arn:aws:iam::123456789012:role/x
+source_profile = sso
+[profile roleproc]
+role_arn = arn:aws:iam::123456789012:role/x
+source_profile = proc
 [sso-session corp]
 sso_region = us-east-1
 sso_start_url = https://example.invalid/start
@@ -193,7 +210,11 @@ region = us-east-1
 		supported bool
 	}{
 		"default": {KindStatic, true}, "keys": {KindStatic, true}, "temp": {KindSession, true},
-		"proc": {KindProcess, true}, "role": {KindOther, false}, "sso": {KindOther, false}, "bare": {KindNone, false},
+		"proc": {KindProcess, true}, "role": {KindRole, true}, "sso": {KindOther, false}, "bare": {KindNone, false},
+		"login": {KindLogin, true}, "rolelogin": {KindRole, true},
+		// A role is only as usable as the profile it starts from. A credential_process
+		// root is refused because the SDK would run the helper with a console window.
+		"rolesso": {KindRole, false}, "roleproc": {KindRole, false},
 	}
 	if len(l.Profiles) != len(want) {
 		t.Fatalf("got %d profiles: %+v", len(l.Profiles), l.Profiles)
@@ -209,6 +230,113 @@ region = us-east-1
 	}
 	if got := find(t, l, AWSID("proc")).Region; got != "eu-west-1" {
 		t.Errorf("region %q", got)
+	}
+}
+
+// writeLoginToken writes a cached aws login token for session, as the AWS CLI
+// does, under dir. The values are fake.
+func writeLoginToken(t *testing.T, dir, session string, expires time.Time) {
+	t.Helper()
+	path, err := logincreds.StandardCachedTokenFilepath(session, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, fmt.Sprintf(`{"accessToken":{"accessKeyId":%q,"secretAccessKey":%q,"sessionToken":"login-token-not-real","accountId":"123456789012","expiresAt":%q},`+
+		`"tokenType":"aws_sigv4","refreshToken":"refresh-not-real","clientId":"client-not-real","dpopKey":"dpop-not-real"}`,
+		fakeAccess, fakeSecret, expires.UTC().Format(time.RFC3339)))
+}
+
+const loginSessionARN = "arn:aws:iam::123456789012:user/tester"
+
+func TestLoginProfileReadsTheCachedToken(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("AWS_LOGIN_CACHE_DIRECTORY", cache)
+	f := newFixture(t, "[profile login]\nlogin_session = "+loginSessionARN+"\nregion = eu-west-1\n", "")
+	expires := time.Now().Add(10 * time.Minute).Truncate(time.Second)
+	writeLoginToken(t, cache, loginSessionARN, expires)
+
+	st, err := f.open(t).Current(context.Background(), AWSID("login"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.KeyHint != keyHint(fakeAccess) {
+		t.Errorf("key hint %q", st.KeyHint)
+	}
+	if st.Expires == nil || st.Expires.Before(expires.Add(-time.Second)) || st.Expires.After(expires.Add(time.Second)) {
+		t.Errorf("expires %v, want about %v", st.Expires, expires)
+	}
+}
+
+const assumeRoleReply = `<AssumeRoleResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><AssumeRoleResult><Credentials>` +
+	`<AccessKeyId>ASIATESTROLEKEY001</AccessKeyId><SecretAccessKey>role-secret-not-real</SecretAccessKey>` +
+	`<SessionToken>role-token-not-real</SessionToken><Expiration>2099-01-01T00:00:00Z</Expiration></Credentials>` +
+	`<AssumedRoleUser><AssumedRoleId>AROATEST:s4browser</AssumedRoleId><Arn>arn:aws:sts::123456789012:assumed-role/x/s4browser</Arn></AssumedRoleUser>` +
+	`</AssumeRoleResult><ResponseMetadata><RequestId>r</RequestId></ResponseMetadata></AssumeRoleResponse>`
+
+func TestRoleOverLoginProfileAssumesTheRoleWithTheLoginKeys(t *testing.T) {
+	cache := t.TempDir()
+	t.Setenv("AWS_LOGIN_CACHE_DIRECTORY", cache)
+	var mu sync.Mutex
+	var form, auth string
+	sts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		form, auth = string(body), r.Header.Get("Authorization")
+		mu.Unlock()
+		_, _ = io.WriteString(w, assumeRoleReply)
+	}))
+	defer sts.Close()
+	t.Setenv("AWS_ENDPOINT_URL_STS", sts.URL)
+
+	f := newFixture(t, "[profile login]\nlogin_session = "+loginSessionARN+"\n"+
+		"[profile work]\nrole_arn = arn:aws:iam::123456789012:role/x\nsource_profile = login\nregion = us-west-2\n", "")
+	writeLoginToken(t, cache, loginSessionARN, time.Now().Add(10*time.Minute))
+	m := f.open(t)
+
+	if p := find(t, m.List(context.Background()), AWSID("work")); p.Kind != KindRole || !p.Supported || p.Region != "us-west-2" {
+		t.Fatalf("listed as %+v", p)
+	}
+	st, err := m.Current(context.Background(), AWSID("work"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.KeyHint != "...Y001" {
+		t.Errorf("key hint %q: the role's keys must be used, not the login keys", st.KeyHint)
+	}
+	if st.Expires == nil || st.Expires.Year() != 2099 {
+		t.Errorf("expires %v: the role's expiry must be reported", st.Expires)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(form, "Action=AssumeRole") || !strings.Contains(form, "role%2Fx") {
+		t.Errorf("request %q", form)
+	}
+	if !strings.Contains(auth, fakeAccess) {
+		t.Error("AssumeRole was not signed with the login session's keys")
+	}
+}
+
+func TestLoginProfileWithoutATokenSaysToSignInAgain(t *testing.T) {
+	t.Setenv("AWS_LOGIN_CACHE_DIRECTORY", t.TempDir()) // empty: aws login was never run
+	f := newFixture(t, "[profile login]\nlogin_session = "+loginSessionARN+"\n"+
+		"[profile rolelogin]\nrole_arn = arn:aws:iam::123456789012:role/x\nsource_profile = login\n", "")
+	m := f.open(t)
+
+	// A role over a login profile must sign in to its source profile.
+	for name, signIn := range map[string]string{"login": "login", "rolelogin": "login"} {
+		_, err := m.Current(context.Background(), AWSID(name))
+		if !errors.Is(err, ErrLoginExpired) {
+			t.Fatalf("%s: got %v, want ErrLoginExpired", name, err)
+		}
+		if !errors.Is(err, engine.ErrCredentialsUnavailable) {
+			t.Errorf("%s: transfers must wait for new credentials, not fail: %v", name, err)
+		}
+		if want := "aws login --profile " + signIn; !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %q does not tell the user to run %q", name, err, want)
+		}
 	}
 }
 

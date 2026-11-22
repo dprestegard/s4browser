@@ -45,9 +45,11 @@ The profile menu at the top left lists:
 - **Profiles from your AWS files** (`~/.aws/config` and `~/.aws/credentials`, or `AWS_CONFIG_FILE` and `AWS_SHARED_CREDENTIALS_FILE`):
   - static keys
   - session keys written by a sign-in tool
-  - `credential_process` helpers, which run hidden and run again a minute before their credentials expire.
+  - `credential_process` helpers, which run hidden and run again a minute before their credentials expire
+  - profiles signed in with `aws login` (`login_session`), which refresh themselves from the AWS CLI's token cache
+  - roles (`role_arn`) that use an `aws login`, static-key or session profile as their `source_profile`. A role with `mfa_serial` is not supported.
 
-  Role, SSO and web-identity profiles are listed but not supported.
+  When an `aws login` session has expired, the profile says which `aws login --profile <name>` to run. Run it, then choose "Load credentials again". SSO, web-identity and `credential_source` profiles, and roles over a `credential_process` profile, are listed but not supported.
 - **Access keys you add** with "Add access keys…". The secret goes to Windows Credential Manager or the macOS Keychain, never to a file.
 
 One profile is active at a time. When a profile's credentials expire during a transfer, the transfer waits with the reason shown. Other profiles' transfers keep going. When you sign in again and choose "Load credentials again", the transfer continues where it stopped. It also resumes on its own if the profile's helper starts handing out working credentials.
