@@ -59,6 +59,8 @@ export const kindLabels: Record<string, string> = {
     static: 'Static keys',
     session: 'Session keys',
     'credential-process': 'credential_process',
+    login: 'aws login',
+    role: 'Assumed role',
     other: 'Unsupported',
     none: 'No credentials',
 };

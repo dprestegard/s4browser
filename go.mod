@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.33.20
 	github.com/aws/aws-sdk-go-v2/credentials v1.21.2
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.115.0
+	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0
 	github.com/aws/smithy-go v1.28.9
 	github.com/wailsapp/wails/v2 v2.17.1
 	github.com/zalando/go-keyring v0.2.8
@@ -28,7 +29,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/signin v1.14.0 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.39.5 // indirect
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.5 // indirect
-	github.com/aws/aws-sdk-go-v2/service/sts v1.52.0 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.16 // indirect

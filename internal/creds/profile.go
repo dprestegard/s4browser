@@ -26,8 +26,8 @@ const (
 // Kind says how a profile obtains credentials.
 type Kind string
 
-// Profile kinds. KindVaultKeys, KindStatic, KindSession and KindProcess are the
-// supported ones.
+// Profile kinds. KindVaultKeys, KindStatic, KindSession, KindProcess, KindLogin
+// and KindRole are the supported ones.
 const (
 	// KindVaultKeys is a static key pair held in the OS vault.
 	KindVaultKeys Kind = "vault-keys"
@@ -39,8 +39,15 @@ const (
 	KindSession Kind = "session"
 	// KindProcess runs a credential_process helper.
 	KindProcess Kind = "credential-process"
-	// KindOther is a role, SSO or web identity profile. The SDK may be able to
-	// use it, but it is untested and unsupported.
+	// KindLogin is a profile written by `aws login` (login_session). The SDK
+	// refreshes its credentials from the token cache that the CLI keeps.
+	KindLogin Kind = "login"
+	// KindRole assumes a role (role_arn) using another profile as its source.
+	// It is supported when the chain ends in a login, static, session or
+	// credential_process profile.
+	KindRole Kind = "role"
+	// KindOther is an SSO or web identity profile, or a role whose chain ends in
+	// one. The SDK may be able to use it, but it is untested and unsupported.
 	KindOther Kind = "other"
 	// KindNone is a profile with no usable credentials, such as a region-only
 	// section.
@@ -75,6 +82,9 @@ var (
 	ErrSecretNotFound  = errors.New("creds: the keys for this profile are not in the credential vault")
 	ErrNoCredentials   = errors.New("creds: this profile has no credentials")
 	ErrProfileInvalid  = errors.New("creds: the AWS config files could not be read for this profile")
+	// ErrLoginExpired means an aws login session cannot supply credentials. It
+	// carries no token text.
+	ErrLoginExpired = errors.New("creds: the aws login session has expired or is missing")
 )
 
 const (
