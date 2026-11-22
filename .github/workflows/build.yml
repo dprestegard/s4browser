@@ -68,9 +68,11 @@ jobs:
         working-directory: frontend
         run: npm ci
 
-      - name: tsc
+      # tsc + vite build. main.go embeds frontend/dist, so vet, tests and
+      # staticcheck need it to exist.
+      - name: Frontend build
         working-directory: frontend
-        run: npx tsc --noEmit
+        run: npm run build
 
       - name: go vet
         run: |
