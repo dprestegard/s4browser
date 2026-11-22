@@ -3,6 +3,7 @@ import {Icon} from '../ui/Icon';
 import {Dialog, useDismiss} from '../ui/overlay';
 import {formatRemaining} from '../ui/format';
 import {osName, vaultName} from '../ui/platform';
+import {Licenses} from '../../wailsjs/go/main/App';
 import {Density, ThemeSetting} from '../settings';
 import {kindLabels} from '../types';
 import {Profiles} from './useProfiles';
@@ -225,6 +226,7 @@ function ViewMenu({theme, setTheme, density, setDensity}: {
     setDensity: (d: Density) => void;
 }) {
     const [open, setOpen] = useState(false);
+    const [licenses, setLicenses] = useState(false);
     const btn = useRef<HTMLButtonElement>(null);
     const menu = useRef<HTMLDivElement>(null);
     useDismiss(open, () => setOpen(false), [btn, menu]);
@@ -252,9 +254,37 @@ function ViewMenu({theme, setTheme, density, setDensity}: {
                     {item(density === 'compact', 'Compact', () => setDensity('compact'))}
                     {item(density === 'comfortable', 'Comfortable', () => setDensity('comfortable'))}
                     <div className="menu-sep"/>
+                    <button type="button" role="menuitem" className="menu-item" onClick={() => {
+                        setOpen(false);
+                        setLicenses(true);
+                    }}>
+                        <span style={{width: 16, display: 'flex'}}/>Licenses…
+                    </button>
+                    <div className="menu-sep"/>
                     <p className="meta" style={{padding: '4px 8px 6px'}}>Transfer settings arrive with the queue.</p>
                 </div>
             )}
+            {licenses && <LicensesDialog onClose={() => setLicenses(false)}/>}
         </div>
+    );
+}
+
+// s4browser's MIT license and the notices of the third-party software it
+// contains, embedded in the binary (licenses.go).
+function LicensesDialog({onClose}: {onClose: () => void}) {
+    const [text, setText] = useState('');
+    useEffect(() => {
+        Licenses().then(setText, (err) => setText(String(err)));
+    }, []);
+    return (
+        <Dialog title="Licenses" onClose={onClose} width={720}>
+            <pre className="mono" tabIndex={0} aria-label="License texts"
+                 style={{maxHeight: '60vh', overflow: 'auto', whiteSpace: 'pre-wrap', margin: 0, userSelect: 'text'}}>
+                {text || 'Loading…'}
+            </pre>
+            <div className="actions">
+                <button type="button" className="btn" data-autofocus onClick={onClose}>Close</button>
+            </div>
+        </Dialog>
     );
 }

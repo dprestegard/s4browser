@@ -121,13 +121,27 @@ Tests (the race detector needs a C compiler, such as WinLibs on Windows or the C
 go test -race ./...
 ```
 
-Also run `go vet ./...`, `staticcheck ./...` and `npx tsc --noEmit` in `frontend`.
+Also run `go vet ./...`, `staticcheck ./...`, `npx tsc --noEmit` in `frontend`, and `go run ./tools/notices -check` (see License).
 
 ### Test tooling
 
 - **`cmd/s4engine`:** a command-line transfer tool on the same engine. It writes only under `<root><run-id>/` (default `s4browser-test/`) and has no flag that turns this off.
 - **`cmd/s4credtest`:** a `credential_process` helper for testing credential expiry.
 - **`S4_WRITE_PREFIX`:** when set, for example to `upload-test/run-1/`, the app refuses every upload, delete, new folder and tag change outside that prefix. Use it for verification against a real bucket.
+
+## License
+
+s4browser is released under the [MIT License](LICENSE).
+
+It contains third-party software under MIT, BSD-2-Clause, BSD-3-Clause, ISC, Apache-2.0 and Unlicense-or-MIT terms, none of them copyleft. [THIRD_PARTY_NOTICES.txt](THIRD_PARTY_NOTICES.txt) lists each component with its license text and the NOTICE files the Apache-2.0 components require. Both files are embedded in the app and shown under View settings ▸ Licenses…, so the single-file Windows exe carries them too.
+
+After changing Go or npm dependencies, or the Go version, regenerate the notices (needs `frontend/node_modules`):
+
+```bash
+go run ./tools/notices
+```
+
+`go test ./tools/notices` fails while a linked module or bundled npm package is missing from the file, and `go run ./tools/notices -check` fails if the file differs in any way. Run the check before a release build.
 
 ## Documentation
 

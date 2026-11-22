@@ -42,7 +42,7 @@ func main() {
 			TitleBar: mac.TitleBarHiddenInset(),
 			About: &mac.AboutInfo{
 				Title:   "s4browser",
-				Message: "Desktop S3 client for large media transfers",
+				Message: "Desktop S3 client for large media transfers.\nMIT License. Third-party licenses are under View settings ▸ Licenses.",
 				Icon:    appIcon,
 			},
 		},
