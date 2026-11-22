@@ -383,6 +383,14 @@ func (s *scheduler) onDownloadPartDone(j *job, index int, written int64, preempt
 	span := j.partRange(index)
 	total := j.partial[int32(index)] + written
 
+	// Every byte of the part is in the file, so the part is done even if the
+	// attempt then saw the job's cancel (a pause, or a full drive on another
+	// part) or a late read error. A write error cannot get here: WriteAt reports
+	// fewer bytes than asked whenever it fails. Keeping the part as partial left
+	// a zero-length range for the next attempt, which failed the job.
+	if class != ClassNone && total == span.Length && !errors.Is(err, ErrLocalIO) {
+		class, err = ClassNone, nil
+	}
 	if class == ClassNone && total != span.Length {
 		err = fmt.Errorf("%w: part %d wrote %d of %d bytes", ErrLocalIO, span.Number, total, span.Length)
 		class = ClassPermanent

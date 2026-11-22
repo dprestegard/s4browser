@@ -120,6 +120,84 @@ func TestFullDrivePausesAndKeepsTheDownload(t *testing.T) {
 	h.assertClean()
 }
 
+// heldDrive holds the write that finishes one byte range until release closes,
+// and closes reached when that write starts.
+type heldDrive struct {
+	fsx.WriteStrategy
+	end     int64 // the write ending here is held
+	once    sync.Once
+	reached chan struct{}
+	release chan struct{}
+}
+
+func (d *heldDrive) Create(path string, size int64) (fsx.WriteTarget, error) {
+	t, err := d.WriteStrategy.Create(path, size)
+	if err != nil {
+		return nil, err
+	}
+	return &heldTarget{WriteTarget: t, drive: d}, nil
+}
+
+type heldTarget struct {
+	fsx.WriteTarget
+	drive *heldDrive
+}
+
+func (t *heldTarget) WriteAt(p []byte, off int64) (int, error) {
+	if off+int64(len(p)) == t.drive.end {
+		t.drive.once.Do(func() { close(t.drive.reached) })
+		<-t.drive.release
+	}
+	return t.WriteTarget.WriteAt(p, off)
+}
+
+func (t *heldTarget) Finish() error {
+	if f, ok := t.WriteTarget.(fsx.Finisher); ok {
+		return f.Finish()
+	}
+	return nil
+}
+
+// TestPauseAfterAPartsLastWriteKeepsThePartDone: an attempt that wrote every
+// byte of its part and then saw the job's cancel (here a pause; in the field a
+// full drive on another part) has finished the part. Recording it as partial
+// left a zero-length range to fetch, and the resume failed the job with
+// "invalid size". It flaked TestFullDrivePausesAndKeepsTheDownload on CI.
+func TestPauseAfterAPartsLastWriteKeepsThePartDone(t *testing.T) {
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "movie.bin")
+	part3End := int64(3 * testPartSize)
+	drive := &heldDrive{WriteStrategy: mustStrategy(t, fsx.StrategySparse), end: part3End,
+		reached: make(chan struct{}), release: make(chan struct{})}
+	var log *getLog
+	h := newHarness(t, options{sink: engine.NewFileSink(drive), wrap: withGetLog(&log)})
+	h.putObject(dlKey, testSize)
+	id := h.download(dest)
+
+	<-drive.reached
+	if err := h.engine.Pause(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState(id, engine.JobPausing) // the attempt's context is cancelled now
+	close(drive.release)
+	h.waitState(id, engine.JobPaused)
+
+	if err := h.engine.Resume(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	h.waitState(id, engine.JobCompleted)
+	for _, req := range log.all() {
+		if req.Length <= 0 {
+			t.Fatalf("a request for no bytes: %+v", req)
+		}
+		if req.Offset >= 2*testPartSize && req.Offset < part3End && req.Offset != 2*testPartSize {
+			t.Fatalf("part 3 was fetched again after it was written: %+v", req)
+		}
+	}
+	assertPattern(t, dest, testSize)
+	h.assertClean()
+}
+
 // TestFullDriveThenCancelRemovesTheTempFile proves a job paused for a full
 // drive is cleaned up like any paused download.
 func TestFullDriveThenCancelRemovesTheTempFile(t *testing.T) {
