@@ -1,8 +1,10 @@
 # s4browser
 
+![s4browser](docs/screenshot-01.jpg)
+
 A desktop client for Amazon S3 on Windows and macOS, built for moving very large media files quickly. You browse buckets, drag files and folders in from Explorer or Finder, download files and folders, and watch a transfer queue that retries on its own. It also deletes objects, creates folders, shares presigned links and edits tags.
 
-Version 0.0.1 is for Windows 10 and 11 (x64). The Mac build (macOS 13 or later, Apple silicon) builds and passes the test suite but has not been signed or tried against real S3 yet. VPC endpoint support is planned: see [docs/roadmap.md](docs/roadmap.md).
+It is a [Wails v3](https://v3.wails.io) app: a Go backend and a React frontend shown in the operating system's own web view, not a bundled browser. That is **Microsoft Edge WebView2** on Windows and **WKWebView** (WebKit) on macOS, so the app is small, but the page has to work in both engines.
 
 ## Install
 
@@ -11,7 +13,7 @@ Version 0.0.1 is for Windows 10 and 11 (x64). The Mac build (macOS 13 or later, 
 1. Copy `s4browser.exe` to any folder. There is no installer, and nothing is written next to the exe.
 2. Run it.
 
-It needs the Microsoft Edge WebView2 runtime, which Windows 11 includes. On a machine without it, the exe offers to download it.
+It needs the Microsoft Edge WebView2 runtime. Windows 11 includes it, and so do Windows 10 machines kept up to date. On a machine without it, the exe offers to download it. (The Mac build needs nothing extra: WKWebView is part of macOS.)
 
 The app keeps its data in your user profile:
 
@@ -34,7 +36,7 @@ The app keeps its data in your user profile:
    xattr -dr com.apple.quarantine /Applications/s4browser.app
    ```
 
-Its data is in `~/Library/Application Support/s4browser/` (the same files as on Windows), WebKit's cache in `~/Library/WebKit/com.dprestegard.s4browser` and `~/Library/Caches/com.dprestegard.s4browser`, and access keys you add in the login Keychain as generic passwords, service `s4browser`, account `profile/<name>`.
+Its data is in `~/Library/Application Support/s4browser/` (the same files as on Windows), the WKWebView cache in `~/Library/WebKit/com.dprestegard.s4browser` and `~/Library/Caches/com.dprestegard.s4browser`, and access keys you add in the login Keychain as generic passwords, service `s4browser`, account `profile/<name>`.
 
 Only one copy of the app runs at a time. A second copy is refused, because it would clean up the first one's uploads.
 
@@ -84,8 +86,8 @@ Closing the app while transfers run asks first. Closing cancels them and aborts 
 - **Downloads follow Windows name rules on every system,** so a downloaded folder can be copied to a Windows machine as it is. On a Mac, keys with names such as `CON`, a trailing dot, `<>:"|?*`, or a full path over 259 characters are refused too.
 - **On exFAT and FAT32 volumes (Mac),** which have no hard links and no exclusive rename, a finished download is moved to its name after checking that the name is free. That is not atomic: if another program creates the same file in that instant, it is replaced. APFS, HFS+ and NTFS are not affected.
 - **macOS: keys are uploaded with names as the file system gives them.** Names are not normalized to NFC, so a name with accents can get a different key from a Mac than from Windows.
-- **No S3-compatible endpoints,** ACLs, versioning UI, rename, copy, storage-class change or restore from Glacier.
 - **Session-key profiles have no automatic refresh.** Sign in again with your tool, then use "Load credentials again".
+- No S3-compatible endpoints, ACLs, versioning UI, rename, copy, storage-class change or restore from Glacier.
 
 ## Building from source
 
@@ -123,9 +125,7 @@ The frontend calls Go through generated bindings in `frontend/bindings`, which a
 
 `.github/workflows/build.yml` runs the checks below and then builds `s4browser-<version>-windows-amd64.exe` and `s4browser-<version>-macos-universal.zip` on GitHub's Windows and macOS runners, so a Mac build does not need a Mac. It runs only when started by hand (Actions ▸ build ▸ Run workflow, or `gh workflow run build.yml`) or when a `v*` tag is pushed, because macOS minutes in a private repo bill at 10x. The builds are the run's artifacts. A tag must match the version in `build/windows/info.json` (tag `v0.0.2` for `0.0.2`), and it also creates a draft GitHub Release with both files, which you publish yourself.
 
-The Mac app is signed ad hoc only, so macOS quarantines it after a download: right-click ▸ Open the first time, or run `xattr -dr com.apple.quarantine s4browser.app`.
-
-Development:
+### Development
 
 Start the Vite dev server, then the app pointed at it:
 
@@ -139,6 +139,8 @@ To run against an in-process fake S3 with no AWS access, build with the `devfake
 ```powershell
 $env:FRONTEND_DEVSERVER_URL = "http://localhost:5173"; go run -tags devfake .
 ```
+
+On a Mac, set the variable the shell way (`FRONTEND_DEVSERVER_URL=http://localhost:5173 go run .`) and export the `CGO_*` variables from the build above first.
 
 Tests (the race detector needs a C compiler, such as WinLibs on Windows or the Command Line Tools on a Mac, and `CGO_ENABLED=1`):
 
@@ -170,8 +172,7 @@ go run ./tools/notices
 
 ## Documentation
 
-- [docs/roadmap.md](docs/roadmap.md): planned work after v1 (Mac release, VPC endpoints).
+- [docs/roadmap.md](docs/roadmap.md): planned work (Mac release, VPC endpoints).
 - [docs/engine-design.md](docs/engine-design.md): the transfer engine's normative design.
-- [docs/implementation-plan.md](docs/implementation-plan.md): v1 scope, decisions and stages.
-- [docs/progress.md](docs/progress.md): what each stage did and found (history).
-- [docs/review-4.1.md](docs/review-4.1.md): the engine review and its findings.
+
+The original implementation plan, the per-stage progress notes and the stage 4.1 engine review were removed from the tree. They are in the git history (`git log --diff-filter=D --name-only -- docs`).

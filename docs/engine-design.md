@@ -1,6 +1,6 @@
 # Engine design
 
-This document and the Go contracts are normative. The contracts live in `internal/engine`, `internal/journal`, `internal/fsx` and `internal/s3x`. If an implementation stage needs a contract change, escalate to Opus as the plan requires.
+This document and the Go contracts are normative. The contracts live in `internal/engine`, `internal/journal`, `internal/fsx` and `internal/s3x`. A change to a contract changes this document in the same commit.
 
 Facts were checked on 2026-11-17 against the AWS documentation and these SDK versions: `aws-sdk-go-v2` v1.48.0, `service/s3` v1.115.0, `service/internal/checksum` v1.11.13.
 
@@ -503,10 +503,12 @@ A remote request that fails with anything but `ErrUploadGone` or `ErrCredentials
 
 ## 13. Stage map
 
+The stage numbers appear in code comments and commit messages. The plan and the per-stage progress notes (`docs/implementation-plan.md`, `docs/progress.md`) were removed and are in the git history.
+
 | Stage | Implements |
 |---|---|
 | **0.3** | `internal/fakes3`: `engine.ObjectStore` in process and an HTTPS server, synthetic pattern, scriptable faults (status codes, resets, stalls, expired credentials, lost Complete responses), the guard decorator, `engine.Clock` fake, synthetic `Source` and `Sink` |
 | **0.4** | `engine.New` and `engine.Engine`: scheduler, attempts, metered body, watchdog, limiter, progress, upload path. `internal/s3x` `ObjectStore` and transport. File `Source`. `journal.Store` file implementation with the lock. Memory and goroutine-leak tests |
-| **0.5** | Download path in the engine. `fsx.WriteStrategy` implementations and `fsx.Finalizer` with `_windows.go` and portable variants. File `Sink`. Strategy comparison on a 300 GB file. Done: see `docs/progress.md` for the measured results and the default |
+| **0.5** | Download path in the engine. `fsx.WriteStrategy` implementations and `fsx.Finalizer` with `_windows.go` and portable variants. File `Sink`. Strategy comparison on a 300 GB file. The measured results and the default are in the git history of `docs/progress.md` (removed) |
 | **0.6** | `cmd/s4engine` against `engine.Engine`, using the guard for every test run. Minimal Wails file-drop window |
-| **2.1** | `journal.Recovery` (the `Recoverer`) and `s3x.Cleaner`. `s3x.Prober`, and `creds.Manager.Prober`, `Reload` and `OnCredentialsChanged`. The drain allowance. `internal/faultsuite`: pause, resume, credential recovery and launch cleanup over HTTPS, including kill and relaunch. Done: see `docs/progress.md` |
+| **2.1** | `journal.Recovery` (the `Recoverer`) and `s3x.Cleaner`. `s3x.Prober`, and `creds.Manager.Prober`, `Reload` and `OnCredentialsChanged`. The drain allowance. `internal/faultsuite`: pause, resume, credential recovery and launch cleanup over HTTPS, including kill and relaunch |

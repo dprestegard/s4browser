@@ -16,7 +16,8 @@ import (
 	"s4browser/internal/fsx"
 )
 
-// These tests cover review findings F1 and F3 (docs/review-4.1.md).
+// These tests cover findings F1 and F3 of the stage 4.1 engine review (docs/review-4.1.md, removed;
+// see git history).
 
 // fullDrive is a write strategy whose files share a byte budget. Once it is
 // spent, every write reports a full drive until refill.

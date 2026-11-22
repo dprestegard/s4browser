@@ -7,7 +7,7 @@ import (
 )
 
 // DefaultLead is the MaxLead of the strategies that need one. It is the figure
-// chosen from the stage 0.5 measurements, see docs/progress.md.
+// chosen from the stage 0.5 measurements (docs/progress.md, removed; see git history).
 const DefaultLead = 2 << 30
 
 // fileTarget is a plain os.File. WriteAt is safe for concurrent use on

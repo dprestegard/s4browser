@@ -11,7 +11,8 @@ import (
 	"s4browser/internal/fakes3"
 )
 
-// These tests cover review findings F4 and F5 (docs/review-4.1.md).
+// These tests cover findings F4 and F5 of the stage 4.1 engine review (docs/review-4.1.md, removed;
+// see git history).
 
 // heldStatSource holds the second Stat of every handle, which is the check
 // before Complete, until release is closed.
