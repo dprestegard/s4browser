@@ -7,8 +7,6 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
-
 	"s4browser/internal/queue"
 )
 
@@ -53,7 +51,7 @@ func (a *App) queueOptions(dir string) queue.Options {
 			return err
 		},
 		Subscribe: a.profiles.OnCredentialsChanged,
-		Emit:      func(event string, payload any) { runtime.EventsEmit(a.ctx, event, payload) },
+		Emit:      a.emit,
 	}
 	if a.browse != nil {
 		o.Region = a.browse.Region

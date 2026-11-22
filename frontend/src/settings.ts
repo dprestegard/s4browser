@@ -1,5 +1,4 @@
 import {useCallback, useEffect, useState} from 'react';
-import {WindowSetDarkTheme, WindowSetLightTheme, WindowSetSystemDefaultTheme} from '../wailsjs/runtime/runtime';
 
 // View preferences. They are per machine conveniences, so they live in the
 // webview's localStorage; nothing here is needed for correctness, and every
@@ -50,13 +49,6 @@ export function useAppliedTheme(theme: ThemeSetting, density: Density) {
     const effective = theme === 'system' ? (dark ? 'dark' : 'light') : theme;
     useEffect(() => {
         document.documentElement.dataset.theme = effective;
-        try {
-            if (theme === 'system') WindowSetSystemDefaultTheme();
-            else if (theme === 'dark') WindowSetDarkTheme();
-            else WindowSetLightTheme();
-        } catch {
-            // Not running inside Wails (plain browser during development).
-        }
     }, [theme, effective]);
 
     useEffect(() => {

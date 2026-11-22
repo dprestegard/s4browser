@@ -51,3 +51,6 @@ secrets*.json
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Windows resource file written by wails3 generate syso
+*.syso

@@ -1,6 +1,6 @@
 import {FormEvent, useCallback, useEffect, useState} from 'react';
-import {AddBucket, Buckets, RemoveBucket} from '../../wailsjs/go/app/App';
-import {EventsOn} from '../../wailsjs/runtime/runtime';
+import {AddBucket, Buckets, RemoveBucket} from '../../bindings/s4browser/internal/app/app';
+import {EventsOn} from '../wails';
 import {Icon} from '../ui/Icon';
 import {Dialog} from '../ui/overlay';
 import {Bucket, BucketList} from '../types';

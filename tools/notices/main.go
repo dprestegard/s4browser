@@ -29,10 +29,10 @@ import (
 
 const outFile = "THIRD_PARTY_NOTICES.txt"
 
-// buildTags are the tags `wails build` uses for a release. On Windows the
+// buildTags are the tags a release build uses for a release. On Windows the
 // WebView2 loader is the pure-Go one; the tag native_webview2loader, which would
 // embed Microsoft's WebView2Loader.dll, is never set.
-const buildTags = "desktop,production,wv2runtime.download"
+const buildTags = "production"
 
 // targets are the platforms the app is released for.
 var targets = []string{"darwin", "windows"}
@@ -250,6 +250,15 @@ func npmPackages(frontend string) ([]Component, error) {
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w (run npm install in frontend)", path, err)
 		}
+		if len(files) == 0 && path == "node_modules/@wailsio/runtime" {
+			// The npm package ships without its license file (package.json says
+			// MIT). It is built from the Wails repository, whose LICENSE is the
+			// one in the Go module.
+			files, err = wailsLicense()
+			if err != nil {
+				return nil, err
+			}
+		}
 		if len(files) == 0 {
 			return nil, fmt.Errorf("%s %s has no license file", path, p.Version)
 		}
@@ -262,6 +271,15 @@ func npmPackages(frontend string) ([]Component, error) {
 		return nil, err
 	}
 	return append(out, vite), nil
+}
+
+// wailsLicense reads the license at the root of the Wails v3 Go module.
+func wailsLicense() ([]File, error) {
+	dir, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/wailsapp/wails/v3").Output()
+	if err != nil {
+		return nil, fmt.Errorf("go list -m wails: %w", err)
+	}
+	return rootFiles(strings.TrimSpace(string(dir)))
 }
 
 // viteHelper is Vite's core license, which covers the module-preload polyfill

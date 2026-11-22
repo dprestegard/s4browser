@@ -1,5 +1,5 @@
 import {useEffect, useState} from 'react';
-import {ObjectMetadata as FetchMetadata, ObjectTags, SaveObjectTags} from '../../wailsjs/go/app/App';
+import {ObjectMetadata as FetchMetadata, ObjectTags, SaveObjectTags} from '../../bindings/s4browser/internal/app/app';
 import {Icon} from '../ui/Icon';
 import {ObjectMetadata, Tag} from '../types';
 

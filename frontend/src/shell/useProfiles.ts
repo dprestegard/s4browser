@@ -6,7 +6,7 @@ import {
     DeleteProfile,
     Profiles as LoadProfiles,
     SelectProfile,
-} from '../../wailsjs/go/app/App';
+} from '../../bindings/s4browser/internal/app/app';
 import {CredentialStatus, ProfileState} from '../types';
 
 // Profile list, the active profile and whether its credentials load. Loading

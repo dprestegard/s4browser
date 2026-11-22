@@ -89,38 +89,55 @@ Closing the app while transfers run asks first. Closing cancels them and aborts 
 
 ## Building from source
 
-Requirements: Go 1.27, Node.js 26 LTS, and the Wails CLI v2.17.1 (`go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.1`). On a Mac, also the Xcode Command Line Tools (`xcode-select --install`).
+Requirements: Go 1.27, Node.js 26 LTS, and the Wails v3 CLI (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0`; only needed for the Windows resource file and for regenerating the bindings). On a Mac, also the Xcode Command Line Tools (`xcode-select --install`).
 
-Windows:
+Build the frontend first, because `main.go` embeds `frontend/dist`:
 
 ```powershell
-wails build -clean -trimpath -ldflags "-s -w"
+cd frontend; npm ci; npm run build; cd ..
 ```
 
-macOS (Wails sets the deployment target to 10.13 unless told otherwise, and Go 1.27 needs 13):
+Windows (the `.syso` holds the icon, manifest and version; it is git-ignored):
+
+```powershell
+wails3 generate syso -arch amd64 -icon build/windows/icon.ico -manifest build/windows/wails.exe.manifest -info build/windows/info.json -out wails_windows_amd64.syso
+go build -tags production -trimpath -buildvcs=false -ldflags "-s -w -H windowsgui" -o build/bin/s4browser.exe
+```
+
+macOS (Go 1.27 needs a deployment target of 13):
 
 ```bash
-CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0 wails build -clean -trimpath -ldflags "-s -w" -platform darwin/arm64
+export CGO_ENABLED=1 CGO_CFLAGS=-mmacosx-version-min=13.0 CGO_LDFLAGS=-mmacosx-version-min=13.0
+go build -tags production -trimpath -buildvcs=false -ldflags "-s -w" -o build/bin/s4browser
+APP=build/bin/s4browser.app
+mkdir -p $APP/Contents/MacOS $APP/Contents/Resources
+cp build/bin/s4browser $APP/Contents/MacOS/ && cp build/darwin/Info.plist $APP/Contents/ && cp build/darwin/icons.icns $APP/Contents/Resources/
+codesign --force --deep --sign - $APP
 ```
 
-The app is `build/bin/s4browser.app`, signed ad hoc by Wails. Use `-platform darwin/universal` for Intel Macs too (not tried). On Windows, the exe is `build\bin\s4browser.exe`. Its version comes from `info.productVersion` in `wails.json`. The icon is drawn from `build\appicon.png`, and Wails makes `build\windows\icon.ico` from it when that file is missing.
+For Intel Macs too, build with `GOARCH=amd64` and `GOARCH=arm64` and join them with `lipo -create` (CI does this). The version is in `build/windows/info.json`, `build/darwin/Info.plist` and the manifest; keep them equal. The icons are drawn from `build/appicon.png` with `wails3 generate icons -input build/appicon.png -macfilename build/darwin/icons.icns -windowsfilename build/windows/icon.ico`.
+
+The frontend calls Go through generated bindings in `frontend/bindings`, which are committed. After changing the exported methods or types of `internal/app`, regenerate them: `wails3 generate bindings -d frontend/bindings -ts`.
 
 ### CI builds
 
-`.github/workflows/build.yml` runs the checks below and then builds `s4browser-<version>-windows-amd64.exe` and `s4browser-<version>-macos-universal.zip` on GitHub's Windows and macOS runners, so a Mac build does not need a Mac. It runs only when started by hand (Actions ▸ build ▸ Run workflow, or `gh workflow run build.yml`) or when a `v*` tag is pushed, because macOS minutes in a private repo bill at 10x. The builds are the run's artifacts. A tag must match `productVersion` in `wails.json` (tag `v0.0.2` for `0.0.2`), and it also creates a draft GitHub Release with both files, which you publish yourself.
+`.github/workflows/build.yml` runs the checks below and then builds `s4browser-<version>-windows-amd64.exe` and `s4browser-<version>-macos-universal.zip` on GitHub's Windows and macOS runners, so a Mac build does not need a Mac. It runs only when started by hand (Actions ▸ build ▸ Run workflow, or `gh workflow run build.yml`) or when a `v*` tag is pushed, because macOS minutes in a private repo bill at 10x. The builds are the run's artifacts. A tag must match the version in `build/windows/info.json` (tag `v0.0.2` for `0.0.2`), and it also creates a draft GitHub Release with both files, which you publish yourself.
 
 The Mac app is signed ad hoc only, so macOS quarantines it after a download: right-click ▸ Open the first time, or run `xattr -dr com.apple.quarantine s4browser.app`.
 
 Development:
 
+Start the Vite dev server, then the app pointed at it:
+
 ```powershell
-wails dev
+cd frontend; npm run dev
+$env:FRONTEND_DEVSERVER_URL = "http://localhost:5173"; go run .
 ```
 
 To run against an in-process fake S3 with no AWS access, build with the `devfake` tag:
 
 ```powershell
-wails dev -tags devfake
+$env:FRONTEND_DEVSERVER_URL = "http://localhost:5173"; go run -tags devfake .
 ```
 
 Tests (the race detector needs a C compiler, such as WinLibs on Windows or the Command Line Tools on a Mac, and `CGO_ENABLED=1`):
